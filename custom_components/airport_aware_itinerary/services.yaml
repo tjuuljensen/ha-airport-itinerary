@@ -1,0 +1,152 @@
+resolve_departure:
+  name: Resolve departure time
+  description: Resolve a local departure using the origin airport timezone.
+  fields:
+    origin_airport:
+      name: Origin airport IATA code
+      required: true
+      selector:
+        text:
+    service_date:
+      name: Local service date
+      required: true
+      selector:
+        text:
+    departure_time:
+      name: Local departure time
+      required: true
+      selector:
+        text:
+    fold:
+      name: Repeated-time occurrence
+      description: Choose earlier or later only when clocks move back.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Earlier occurrence
+              value: earlier
+            - label: Later occurrence
+              value: later
+
+create_itinerary:
+  name: Create itinerary
+  description: Create a locally stored itinerary and return its identifier.
+  fields:
+    name:
+      name: Itinerary name
+      required: true
+      selector:
+        text:
+
+add_flight:
+  name: Add flight
+  description: Add a flight with airport-local schedule times to an itinerary.
+  fields:
+    itinerary_id:
+      name: Itinerary identifier
+      required: true
+      selector:
+        text:
+    flight_number:
+      name: Flight number
+      required: true
+      selector:
+        text:
+    origin_airport:
+      name: Origin airport IATA code
+      required: true
+      selector:
+        text:
+    service_date:
+      name: Origin service date
+      required: true
+      selector:
+        text:
+    departure_time:
+      name: Local departure time
+      required: true
+      selector:
+        text:
+    fold:
+      name: Repeated-time occurrence
+      description: Choose earlier or later only when clocks move back.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Earlier occurrence
+              value: earlier
+            - label: Later occurrence
+              value: later
+    destination_airport:
+      name: Destination airport IATA code
+      required: false
+      selector:
+        text:
+    arrival_date:
+      name: Destination local arrival date
+      description: When both arrival fields are supplied, the integration stores the calculated scheduled flight duration.
+      required: false
+      selector:
+        text:
+    arrival_time:
+      name: Local arrival time
+      required: false
+      selector:
+        text:
+    label:
+      name: Label
+      required: false
+      selector:
+        text:
+
+remove_flight:
+  name: Remove flight
+  description: Remove one flight leg from an itinerary.
+  fields:
+    itinerary_id:
+      name: Itinerary identifier
+      required: true
+      selector:
+        text:
+    leg_id:
+      name: Flight leg identifier
+      required: true
+      selector:
+        text:
+
+clear_itinerary:
+  name: Clear itinerary
+  description: Remove all flight legs while keeping the itinerary.
+  fields:
+    itinerary_id:
+      name: Itinerary identifier
+      required: true
+      selector:
+        text:
+
+delete_itinerary:
+  name: Delete itinerary
+  description: Delete the itinerary and all its flight legs.
+  fields:
+    itinerary_id:
+      name: Itinerary identifier
+      required: true
+      selector:
+        text:
+
+rename_itinerary:
+  name: Rename itinerary
+  description: Change the name of a stored itinerary.
+  fields:
+    itinerary_id:
+      name: Itinerary identifier
+      required: true
+      selector:
+        text:
+    name:
+      name: Itinerary name
+      required: true
+      selector:
+        text:

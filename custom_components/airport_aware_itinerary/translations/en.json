@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Airport-aware Flight Itinerary",
+        "description": "Store itineraries locally. No account or schedule provider is required."
+      }
+    },
+    "abort": {
+      "already_configured": "This integration is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optional flight tracking",
+        "description": "Select a Flightradar24 additional-tracked sensor for live data. Optionally send upcoming itinerary flight numbers to the integration's Add to track text entity.",
+        "data": {
+          "tracked_flights_entity": "Flightradar24 additional-tracked sensor",
+          "fr24_auto_track": "Automatically add itinerary flights to FR24 tracking",
+          "fr24_add_to_track_entity": "Flightradar24 Add to track entity"
+        },
+        "error": {
+          "select_add_to_track_entity": "Select the Flightradar24 Add to track text entity to enable automatic tracking.",
+          "select_tracked_flights_entity": "Select the Flightradar24 Additional Tracked sensor to avoid adding flights that are already tracked."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "itineraries": {
+        "name": "Itineraries"
+      }
+    }
+  }
+}
