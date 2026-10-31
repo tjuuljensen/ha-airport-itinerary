@@ -2,19 +2,47 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers import entity_registry as er
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 
 from .airport_data import get_airport_cities, get_airport_coordinates, get_data_metadata
-from .const import CONF_TRACKED_FLIGHTS_ENTITY, DOMAIN, EVENT_UPDATED
+from .const import CONF_TRACKED_FLIGHTS_ENTITY, CONF_FR24_CONNECTION, DOMAIN, EVENT_UPDATED, EVENT_LIFECYCLE
+from .lifecycle import match_flight
 from .manager import ItineraryManager
 from .plane_timezone import timezone_for_coordinates
+
+
+class ItineraryDeadline(SensorEntity):
+    """UTC deadlines suitable for native HA time triggers."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = "timestamp"
+
+    def __init__(self, entry, key, tracker):
+        self.key, self.tracker = key, tracker
+        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_name = "API start" if key == "api_start_at" else "API stop"
+        self._attr_suggested_object_id = f"airport_itinerary_{key}"
+        self.entity_id = f"sensor.airport_itinerary_{key}"
+
+    @property
+    def native_value(self):
+        value = self.tracker.view.get(self.key)
+        return datetime.fromisoformat(value) if value else None
+
+    async def async_added_to_hass(self):
+        self.async_on_remove(self.hass.bus.async_listen(EVENT_LIFECYCLE, self._updated))
+
+    @callback
+    def _updated(self, event):
+        self.async_write_ha_state()
 
 
 async def async_setup_entry(
@@ -22,7 +50,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the itinerary summary sensor."""
     manager: ItineraryManager = hass.data[DOMAIN][entry.entry_id]["manager"]
-    async_add_entities([FlightItinerariesSensor(entry, manager)])
+    async_add_entities([FlightItinerariesSensor(entry, manager),
+                        ItineraryDeadline(entry, "api_start_at", hass.data[DOMAIN][entry.entry_id]["tracker"]),
+                        ItineraryDeadline(entry, "api_stop_at", hass.data[DOMAIN][entry.entry_id]["tracker"])])
 
 
 class FlightItinerariesSensor(SensorEntity):
@@ -40,6 +70,7 @@ class FlightItinerariesSensor(SensorEntity):
         self._attr_unique_id = entry.entry_id
         self._attr_has_entity_name = True
         self._attr_suggested_object_id = "flight_itineraries"
+        self.entity_id = "sensor.flight_itineraries"
         self._attr_native_value = 0
         self._attr_extra_state_attributes: dict[str, Any] = {}
 
@@ -74,13 +105,21 @@ class FlightItinerariesSensor(SensorEntity):
             CONF_TRACKED_FLIGHTS_ENTITY,
             self._entry.data.get(CONF_TRACKED_FLIGHTS_ENTITY),
         )
-        source_state = self.hass.states.get(source_entity) if source_entity else None
+        connected = self._entry.options.get(CONF_FR24_CONNECTION, True)
+        source_state = self.hass.states.get(source_entity) if connected and source_entity else None
         tracked_legs = self._match_tracked_legs(itineraries, source_state)
-        source_health = _tracking_source_health(source_entity, source_state, tracked_legs)
+        source_health = _tracking_source_health(source_entity, source_state, tracked_legs) if connected else "disabled"
+        runtime = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        lifecycle = runtime["tracker"].view if runtime.get("tracker") else {}
         self._attr_extra_state_attributes = {
             "itineraries": itineraries,
+            "journeys": lifecycle.get("journeys", []),
+            "tracking": lifecycle,
+            "fr24_connection_entity": er.async_get(self.hass).async_get_entity_id(
+                "switch", DOMAIN, f"{self._entry.entry_id}_fr24_connection"),
+            "airport_data_refresh": runtime["airports"].status if runtime.get("airports") else {},
             "tracking_source_entity": source_entity,
-            "tracking_source_status": source_state.state if source_state else "not_configured",
+            "tracking_source_status": source_state.state if source_state else "not_configured" if connected else "disabled",
             "tracking_source_health": source_health,
             "tracked_legs": tracked_legs,
             "airport_mapping_source": metadata.get("source_repository"),
@@ -95,11 +134,12 @@ class FlightItinerariesSensor(SensorEntity):
         await super().async_added_to_hass()
         await self._async_update()
         self.async_on_remove(self.hass.bus.async_listen(EVENT_UPDATED, self._handle_update))
+        self.async_on_remove(self.hass.bus.async_listen(EVENT_LIFECYCLE, self._handle_update))
         source_entity = self._entry.options.get(
             CONF_TRACKED_FLIGHTS_ENTITY,
             self._entry.data.get(CONF_TRACKED_FLIGHTS_ENTITY),
         )
-        if source_entity:
+        if source_entity and self._entry.options.get(CONF_FR24_CONNECTION, True):
             self.async_on_remove(
                 async_track_state_change_event(self.hass, [source_entity], self._handle_update)
             )
@@ -112,15 +152,6 @@ class FlightItinerariesSensor(SensorEntity):
     async def _async_update(self) -> None:
         """Persist completion timestamps before publishing updated attributes."""
         self._refresh_attributes()
-        changed = False
-        for tracked in self._attr_extra_state_attributes.get("tracked_legs", []):
-            finished_at = tracked.get("finished_at")
-            if finished_at:
-                changed |= await self._manager.async_record_finished_at(
-                    tracked["itinerary_id"], tracked["leg_id"], finished_at
-                )
-        if changed:
-            self._refresh_attributes()
         self.async_write_ha_state()
 
     @staticmethod
@@ -136,54 +167,10 @@ class FlightItinerariesSensor(SensorEntity):
         matches = []
         for itinerary in itineraries:
             for leg in itinerary.get("legs", []):
-                scheduled = _timestamp(leg.get("departure", {}).get("utc_timestamp"))
-                if not scheduled:
+                flight = match_flight(leg, flights)
+                if flight is None:
                     continue
-                expected_number = str(leg.get("flight_number", "")).strip().upper()
-                expected_origin = str(leg.get("origin_airport", "")).strip().upper()
-                candidates = []
-                expected_destination = str(
-                    leg.get("destination_airport", "")
-                ).strip().upper()
-                for flight in flights:
-                    if not isinstance(flight, dict):
-                        continue
-                    numbers = {
-                        str(flight.get(key, "")).strip().upper()
-                        for key in ("flight_number", "callsign")
-                        if flight.get(key)
-                    }
-                    source_origin = str(flight.get("airport_origin_code_iata", "")).strip().upper()
-                    source_destination = str(
-                        flight.get("airport_destination_code_iata", "")
-                    ).strip().upper()
-                    source_time = next(
-                        (
-                            timestamp
-                            for key in (
-                                "time_scheduled_departure",
-                                "time_estimated_departure",
-                                "time_real_departure",
-                            )
-                            if (timestamp := _timestamp(flight.get(key)))
-                        ),
-                        0,
-                    )
-                    if (
-                        expected_number in numbers
-                        and (not source_origin or source_origin == expected_origin)
-                        and (
-                            not expected_destination
-                            or not source_destination
-                            or source_destination == expected_destination
-                        )
-                        and source_time
-                        and abs(source_time - scheduled) <= 43200
-                    ):
-                        candidates.append((abs(source_time - scheduled), flight))
-                if not candidates:
-                    continue
-                _, flight = min(candidates, key=lambda candidate: candidate[0])
+                expected_number = leg.get("flight_number", "")
                 tracked_type = str(flight.get("tracked_type", "")).strip().lower()
                 matched = {
                     "itinerary_id": itinerary["id"],
@@ -219,17 +206,10 @@ class FlightItinerariesSensor(SensorEntity):
                 ):
                     if flight.get(key) is not None:
                         matched[key] = flight[key]
-                fallback = source_state.last_updated
-                if isinstance(leg.get("finished_at"), str):
-                    try:
-                        fallback = datetime.fromisoformat(
-                            leg["finished_at"].replace("Z", "+00:00")
-                        )
-                    except ValueError:
-                        pass
-                finished_at = _confirmed_finished_at(flight, fallback)
-                if finished_at:
-                    matched["finished_at"] = finished_at
+                if matched.get("on_ground") in (0, 1) and "on_ground" in matched:
+                    matched["on_ground"] = bool(matched["on_ground"])
+                if leg.get("finished_at"):
+                    matched["finished_at"] = leg["finished_at"]
                 if flight.get("latitude") is not None and flight.get("longitude") is not None:
                     try:
                         matched["plane_timezone"] = timezone_for_coordinates(
@@ -246,44 +226,6 @@ class FlightItinerariesSensor(SensorEntity):
         return self._attr_extra_state_attributes
 
 
-def _confirmed_finished_at(flight: dict[str, Any], fallback: datetime) -> str | None:
-    """Return a stable terminal timestamp for confirmed landing or gate arrival."""
-    for key in (
-        "time_gate_arrival",
-        "gate_arrival",
-        "time_real_landing",
-        "landing",
-        "time_real_arrival",
-    ):
-        value = flight.get(key)
-        if isinstance(value, bool):
-            if value:
-                timestamp = _timestamp(flight.get("time_real_arrival"))
-                if timestamp:
-                    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(
-                        timespec="seconds"
-                    )
-                return fallback.astimezone(timezone.utc).isoformat(timespec="seconds")
-            continue
-        timestamp = _timestamp(value)
-        if timestamp:
-            return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(timespec="seconds")
-    return None
-
-
-def _timestamp(value: Any) -> float:
-    """Parse numeric epoch or timezone-aware ISO datetime values."""
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value) if value > 0 else 0
-    if not isinstance(value, str) or not value.strip():
-        return 0
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return 0
-    return parsed.timestamp() if parsed.tzinfo is not None else 0
-
-
 def _tracking_source_health(source_entity: str | None, source_state: Any, tracked: list[dict[str, Any]]) -> str:
     """Describe whether the optional FR24 sensor currently supplies usable data."""
     if not source_entity:
@@ -293,7 +235,7 @@ def _tracking_source_health(source_entity: str | None, source_state: Any, tracke
     if source_state.state in {"unknown", "unavailable"}:
         return "unavailable"
     flights = source_state.attributes.get("flights")
-    if not isinstance(flights, list):
+    if not isinstance(flights, list) or any(not isinstance(flight, dict) for flight in flights):
         return "unsupported_data"
     if not flights:
         return "no_flights"

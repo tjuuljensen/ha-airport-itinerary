@@ -1,0 +1,104 @@
+# Badge-only cutover example; see ../docs/package-migration.md.
+# Inputs: Airport Itinerary sensor, existing presentation helpers and priority list.
+# Outputs: existing badge sensor/helper identities and configured notifications.
+# Requires flight_itinerary_adapter.jinja and the existing shared badge system.
+# Replace the legacy display sensor, eligibility sensor and mirror before loading.
+# Retain existing helpers and the old plane-map sensor. Never load duplicate IDs.
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: /1
+      - trigger: state
+        entity_id:
+          - sensor.flight_itineraries
+          - input_boolean.flight_itinerary_enabled
+          - input_number.flight_itinerary_display_before_hours
+          - input_number.flight_itinerary_display_after_hours
+    actions:
+      - variables:
+          display: >-
+            {% from 'flight_itinerary_adapter.jinja' import display_model %}
+            {{ display_model(
+              state_attr('sensor.flight_itineraries', 'journeys') or [],
+              state_attr('sensor.flight_itineraries', 'itineraries') or [],
+              state_attr('sensor.flight_itineraries', 'tracked_legs') or [],
+              is_state('input_boolean.flight_itinerary_enabled', 'on'),
+              (state_attr('sensor.flight_itineraries', 'tracking') or {}).get('fetching', false),
+              as_timestamp(now()),
+              states('input_number.flight_itinerary_display_before_hours') | float(0.5),
+              states('input_number.flight_itinerary_display_after_hours') | float(2)
+            ) | from_json }}
+    sensor:
+      - name: Flight itinerary display
+        unique_id: flight_itinerary_display
+        state: "{{ display.status }}"
+        attributes:
+          data: "{{ display }}"
+  - binary_sensor:
+      - name: Flight itinerary display active
+        unique_id: flight_itinerary_display_active
+        state: "{{ (state_attr('sensor.flight_itinerary_display', 'data') or {}).get('badge_active', false) }}"
+        attributes:
+          starts_at: "{{ (state_attr('sensor.flight_itinerary_display', 'data') or {}).get('badge_start') }}"
+          ends_at: "{{ (state_attr('sensor.flight_itinerary_display', 'data') or {}).get('badge_end') }}"
+
+automation:
+  - id: flight_itinerary_display_badge_mirror
+    alias: "Display Badge: Update flight itinerary badge"
+    mode: restart
+    triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - binary_sensor.flight_itinerary_display_active
+          - input_boolean.flight_itinerary_enabled
+          - input_select.display_badges
+          - counter.displayable_display_badges
+          - sensor.display_badges
+      - trigger: time_pattern
+        minutes: /1
+    actions:
+      - variables:
+          desired: >-
+            {% set source = 'binary_sensor.flight_itinerary_display_active' %}
+            {% set options = state_attr('input_select.display_badges', 'options') or [] %}
+            {% set slots = states('counter.displayable_display_badges') | int(0) %}
+            {% set higher = namespace(count=0, found=false) %}
+            {% for entry in options %}
+              {% if entry == source %}
+                {% set higher.found = true %}
+              {% elif not higher.found and is_state('input_boolean.' ~ entry.split('.', 1)[1], 'on') %}
+                {% set higher.count = higher.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ 'on' if is_state('input_boolean.flight_itinerary_enabled', 'on') and is_state(source, 'on') and higher.found and higher.count < slots else 'off' }}
+      - condition: template
+        value_template: "{{ states('input_boolean.flight_itinerary_display_active') != desired }}"
+      - action: "input_boolean.turn_{{ desired }}"
+        target:
+          entity_id: input_boolean.flight_itinerary_display_active
+
+  - id: flight_itinerary_integration_notifications
+    alias: Flight itinerary - Integration notifications
+    mode: queued
+    triggers:
+      - trigger: event
+        event_type: airport_aware_itinerary_flight_event
+    conditions:
+      - condition: state
+        entity_id: input_boolean.flight_itinerary_notifications
+        state: "on"
+      - condition: template
+        value_template: "{{ states('input_text.flight_itinerary_notify_service').startswith('notify.') }}"
+    actions:
+      - action: "{{ states('input_text.flight_itinerary_notify_service') }}"
+        data:
+          title: "{{ trigger.event.data.itinerary_name }}"
+          message: "{{ trigger.event.data.flight_number }}: {{ trigger.event.data.event | replace('_', ' ') }} ({{ trigger.event.data.evidence_source }})"
+          data:
+            url: /map/flightradar24
+            clickAction: /map/flightradar24

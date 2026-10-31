@@ -54,7 +54,7 @@ def test_dst_fold_chooses_earlier_or_later_instant():
         ("XXX", "2026-10-22", "20:25", "No timezone data"),
         ("DENV", "2026-10-22", "20:25", "three-character"),
         ("DEN", "2026-2-2", "20:25", "YYYY-MM-DD"),
-        ("DEN", "2026-10-22", "24:00", "HH:MM"),
+        ("DEN", "2026-10-22", "24:00", "valid calendar"),
         ("DEN", "2026-02-30", "20:25", "valid calendar"),
     ],
 )

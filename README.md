@@ -1,144 +1,207 @@
-# Airport-aware Flight Itinerary
+# Airport-aware Flight Itinerary (AaFI)
 
-Create and manage flight itineraries in Home Assistant. Enter each airport's
-local schedule details; the integration resolves the IANA timezone and stores
-an offset-aware instant for dashboards and automations. It does not call an
-online timezone service or fetch schedules.
+Keep your flight plans in Home Assistant, from entering the booking to following
+the journey. AaFI stores trips with one or more flight legs and displays departure
+and arrival times in each airport's local timezone. Two included dashboard cards
+let you enter flights and view your itinerary. Optional Flightradar24 (FR24)
+tracking adds live details as they become available.
 
-## Install
+## What you can use it for
 
-The integration is under development in the local repository
-`tjuuljensen/ha-airport-itinerary`; it is not yet published on GitHub or
-available through HACS. For local evaluation, copy
-`custom_components/airport_aware_itinerary` into `/config/custom_components/`
-and restart Home Assistant. After the public repository is published, add it
-in HACS as a custom **Integration** repository. Then add **Airport-aware Flight
-Itinerary** from Settings > Devices & services.
+- **Keep a trip together.** Create a named itinerary for a single flight or a
+  journey with connections. The dashboard selects an active itinerary or the
+  next upcoming one, while keeping past trips available.
+- **Avoid converting flight times yourself.** Enter the local dates and times
+  shown on your booking. AaFI looks up the airports' timezones, handles different
+  dates and daylight-saving offsets, and calculates duration when arrival is
+  supplied. For example, enter a Copenhagen departure in Copenhagen time and a
+  New York arrival in New York time, regardless of your HA timezone.
+- **See the plan even without live data.** Your saved schedule and airport clocks
+  remain available when FR24 is disconnected, unavailable or not installed.
+- **Follow flights with less manual tracking setup.** With FR24 connected, AaFI
+  can request tracking before departure, show available live information and
+  clean up flights it owns after completion. Each automatic feature is optional.
+- **Use the journey in your own automations.** Sensors expose journey timing and
+  tracking demand; lifecycle events can drive notifications. Badge and notification
+  examples are provided for adapting an existing HA setup.
 
-No account is required. Airport timezones and city names are bundled and work
-offline.
-The host must have IANA timezone data available to Python's `zoneinfo`; Home
-Assistant OS and supported Core installations normally provide it.
+### With or without Flightradar24
 
-## Actions and data
+| | Schedule-only | With FR24 connected |
+| --- | --- | --- |
+| Enter and retain trips | Yes, stored locally | Yes, the same saved trips |
+| Airport-local times and scheduled duration | From your booking and the offline airport dataset | The same, with available estimated/actual times shown alongside the plan |
+| Progress | Based on entered departure/arrival times when available | Uses a fresh aircraft position when available; otherwise falls back to the schedule |
+| Departure and arrival evidence | A schedule alone cannot confirm either | Uses matching provider evidence; manual or inferred completion is identified separately |
+| Tracking and fetching automation | No FR24 connection needed | Optional additions, owned-flight cleanup, fetching enablement and guarded shutdown |
 
-The integration provides response-bearing actions in the
-`airport_aware_itinerary` domain:
+AaFI does not search for flights, import airline bookings, or fetch a timetable
+from a flight number. You enter the planned schedule yourself. It does not guess
+flight duration from airport distance. FR24 data can be late, incomplete or absent,
+so a scheduled arrival time is never proof that the aircraft has landed.
 
-- `resolve_departure`: resolve an origin IATA code, service date (`YYYY-MM-DD`),
-  and local departure time (`HH:MM`) to an offset-aware ISO timestamp.
-- `create_itinerary`: create a named locally stored trip. The response returns
-  its `itinerary.id`.
-- `add_flight`: append a flight leg to that trip. Departure is required;
-  destination and arrival local date/time are optional and must be provided as
-  a complete set. If arrival is supplied, the stored leg also includes
-  `flight_time_seconds`, calculated from the two resolved UTC instants. This
-  gives the scheduled flight duration across airport timezones and DST changes.
-- `remove_flight`, `clear_itinerary`, and `delete_itinerary`: maintain trips.
-- `rename_itinerary`: update a trip name while preserving its identifier and flights.
+AaFI also does not replace the FR24 integration, create a plane-map entity, or
+send notifications by itself. Your HA automations handle notification delivery;
+existing badge and map setups can use the [adapter examples](examples/README.md).
 
-Expected validation errors are returned as `success: false` with a readable
-`error`. Call actions from a script with `response_variable`, for example:
+## Install with HACS
+
+Use AaFI as a **custom Integration repository** in an existing
+[HACS installation](https://hacs.dev/docs/use/). This installs the integration
+and both cards together.
+
+1. In HACS, open the top-right menu and choose **Custom repositories**.
+2. Enter `https://github.com/tjuuljensen/ha-airport-itinerary`, select
+   **Integration** as the type, and add it.
+3. Find **Airport-aware Flight Itinerary** in HACS, open it and download it.
+4. Restart Home Assistant.
+5. Open **Settings > Devices & services > Add integration**, search for
+   **Airport-aware Flight Itinerary**, and complete setup. No AaFI account or
+   integration YAML block is required.
+6. Reload your browser, then add the included cards to your dashboard as below.
+
+These steps follow HACS's [custom repository procedure](https://hacs.dev/docs/faq/custom_repositories/).
+There is no separate Dashboard repository or card download to install.
+
+Select release **0.3.7** or later for the consolidated integration and cards.
+AaFI is installed through HACS's custom repository feature; inclusion in the
+default HACS catalogue is separate. See [release notes](CHANGELOG.md) for changes.
+
+### Manual installation
+
+Copy the complete `custom_components/airport_aware_itinerary` directory from
+AaFI into `/config/custom_components/airport_aware_itinerary`. Include its `www`
+directory, which contains the cards. Restart HA and complete steps 5 and 6 above.
+
+Home Assistant **2026.2.3 or later** is required. HA must provide IANA timezone
+data to Python's `zoneinfo`, as normal HA OS and supported Core installations do.
+
+## The cards install automatically
+
+When AaFI loads, it serves and registers both cards automatically with HA's
+default, UI-managed Lovelace resources. Card updates arrive with integration
+updates. You do not need to copy JavaScript files or add a resource URL manually.
+
+You choose where the cards appear: open your dashboard's **Edit dashboard > Add
+card** picker and select **Airport Itinerary Input** and **Airport Itinerary
+Reservations**. AaFI does not insert cards into existing dashboards for you.
+Reload the browser if the new card types have not appeared yet.
+
+For YAML card configuration, the same cards are:
 
 ```yaml
-sequence:
-  - action: airport_aware_itinerary.resolve_departure
-    data:
-      origin_airport: DEN
-      service_date: "2026-10-22"
-      departure_time: "20:25"
-    response_variable: departure
-  - if:
-      - condition: template
-        value_template: "{{ departure.success }}"
-    then:
-      - action: persistent_notification.create
-        data:
-          title: Departure resolved
-          message: "{{ departure.timestamp }} ({{ departure.timezone }})"
-    else:
-      - action: persistent_notification.create
-        data:
-          title: Departure needs attention
-          message: "{{ departure.error }}"
+type: custom:airport-itinerary-input
+title: Add a flight
+initial_fold: true
 ```
 
-`sensor.flight_itineraries` exposes stored trips and
-legs as attributes. The entity registry may adjust the object ID if that name
-is already in use; use the registered entity ID after setup. A separate
-[Airport Itinerary Dashboard](https://github.com/tjuuljensen/lovelace-airport-itinerary)
-HACS Dashboard repository provides itinerary input and reservation-style
-schedule cards. Each reservation shows its own scheduled flight duration when
-an expected destination-local arrival was entered; total journey duration is
-calculated from the first departure to the final arrival.
-
-To connect optional live data, open the integration's options and select the
-Flightradar24 Additional Tracked sensor. The adapter reads its `flights`
-attribute and matches a leg using flight number/callsign, compatible origin and
-destination codes, and the nearest scheduled departure within 12 hours. A
-scheduled FR24 record is kept distinct from an actively tracked flight. Without
-that sensor, itinerary storage and time resolution continue to work. The
-itinerary sensor reports whether tracking is not configured, unavailable,
-unsupported, unmatched, scheduled, or live.
-
-The options also support **Automatically add itinerary flights to FR24
-tracking**. Enable it and select FR24's **Add to track** text entity. When a
-flight is added to an itinerary, the integration sends its flight number using
-Home Assistant's `text.set_value` action. Automatic tracking requires both the
-Additional Tracked sensor and Add to track text entity, so it can skip flights
-already listed by FR24, completed legs, duplicate flight numbers, and flights
-whose departure was more than 12 hours ago. If the FR24 sensor is unavailable,
-synchronization waits until it updates. This feature is opt-in; leaving it
-disabled keeps the FR24 connection read-only. FR24's tracking input behavior is documented by the
-[Flightradar24 integration](https://github.com/AlexandrErohin/home-assistant-flightradar24).
-
-Aircraft-local time is optional enrichment: resolving a tracked position to an
-IANA timezone requires the `timezonefinder` Python package to be available.
-That package is deliberately not an integration requirement, so its installation
-cannot block Home Assistant setup. If unavailable, FR24 details still work and
-the dashboard reports the aircraft timezone as unavailable.
-
-## Time and data behavior
-
-- The bundled maps are generated from `mwgg/Airports` at commit
-  `a89e4e0dda9d9878337e2da190ebe1ef1d6af705`: 7,918 IATA-to-timezone mappings,
-  7,744 IATA-to-city mappings, and 7,918 offline IATA-to-coordinate mappings. The sensor adds
-  city names and coordinates to itinerary legs at read time, including existing
-  saved itineraries. The dashboard uses these coordinates with a recent FR24
-  position to estimate progress along the great-circle route.
-  Provenance and the upstream MIT notice are in [NOTICE.md](NOTICE.md).
-- `2026-10-22 20:25` at DEN resolves to
-  `2026-10-22T20:25:00-06:00`.
-- Unknown airport codes, unavailable zone data, invalid dates/times, and
-  daylight-saving gaps return visible validation errors. Repeated fall-back
-  times require an explicit `fold` choice of `earlier` or `later`; pass
-  `fold: earlier` or `fold: later` to `resolve_departure` when needed.
-- Stored data survives Home Assistant restarts. Removing the integration entry
-  does not delete stored trip data; `delete_itinerary` removes a trip explicitly.
-
-## Maintain the airport map
-
-The integration runs fully offline after installation. A maintainer refreshes
-the data deliberately from a reviewed upstream commit:
-
-```powershell
-python scripts/update_airport_timezones.py --commit <full-40-character-sha>
+```yaml
+type: custom:airport-itinerary-schedule
+title: Itinerary
 ```
 
-The updater downloads the source at that exact commit, rejects malformed IATA
-codes, missing zones, duplicate codes with conflicting zones or city names, and
-invalid IANA names, then regenerates the compact maps. Review the source changes
-and update the commit and attribution in this README and `NOTICE.md` in the same
-release.
+The cards discover the itinerary sensor. Set `entity` explicitly if needed,
+using the ID registered in your installation. `initial_fold: true` starts the
+input card collapsed for a compact dashboard; expand it when you want to add a
+flight. The itinerary dropdown is sorted by trip start time, newest first.
 
-## Development
+If you explicitly manage **Lovelace resources in YAML**, add the module entry
+shown in the [card guide](docs/dashboard-cards.md#install-with-aafi); AaFI cannot
+edit that YAML for you. Merely using YAML to configure a card does not require
+this exception. Known old standalone resource URLs are migrated automatically
+in UI-managed resources; keep only one AaFI card module.
 
-Run unit tests with `python -m pytest`. The test suite covers the pinned map,
-timestamp conversion, DST transitions, invalid input, and source-map conflicts.
-CI also runs the HACS integration validation action and Home Assistant's
-`hassfest` checks against the integration.
+## Your first itinerary
+
+1. Open **Airport Itinerary Input**, create a named trip, and select it.
+2. Enter the flight number, origin airport's three-letter IATA code, and the
+   departure date/time at that airport. Add a destination and its local arrival
+   date/time if you have them.
+3. Save the flight. Add further legs to the same itinerary for connections, or
+   use **Add + prepare return** on the first leg to draft a separate return trip.
+4. View the trip in **Airport Itinerary Reservations**. The card chooses the
+   active trip, or the nearest upcoming one; you can select another from the
+   dropdown at any time.
+
+The arrival date is suggested from departure until you edit it; check it against
+the booking, especially for overnight flights and different timezones. Arrival
+time is never guessed. For an ambiguous autumn clock time, choose its earlier
+or later occurrence using the separate departure/arrival selectors. See the
+[DST explanation](docs/configuration.md#repeated-daylight-saving-times).
+
+No FR24 setup is needed for this workflow. Airport data is bundled and available
+offline. **Refresh airport data** is an optional online action that updates the
+airport lookup, not your saved schedules or flight status.
+
+## Configure live tracking
+
+Install and configure the separate
+[Flightradar24 integration](https://github.com/AlexandrErohin/home-assistant-flightradar24)
+first. In AaFI's options, enable **FR24 connection** and select FR24's
+**Additional Tracked** sensor. This lets AaFI display matching flight details
+without enabling automatic controls.
+
+To automate tracking, select the FR24 **Add to track** and **Remove from track**
+entities and its API-fetching switch as needed. All selected entities must belong
+to the same FR24 configuration entry. Enable only the features you want:
+
+- **Automatic additions:** request flights during their tracking window and retry
+  while waiting for FR24 details.
+- **Automatic cleanup:** remove owned flights after completion; leave unrelated,
+  manually tracked flights alone.
+- **Automatic API enablement:** start fetching before a journey.
+- **Guarded shutdown:** stop fetching only for sessions AaFI started and when no
+  itinerary, pending cleanup or unrelated tracked flight requires it to stay on.
+
+Automatic additions, cleanup, API enablement and guarded shutdown are independently
+opt-in. Use **FR24 connection** to switch AaFI between live and schedule-only mode
+while retaining all entity selections and preferences. Turning it off does not
+turn off FR24 itself or remove its tracked flights.
+
+The schedule card can show a **Live tracking / Schedule only** control if you
+enable **Show FR24 connection control** in its editor. The **Finish flight**
+checkmark is also optional and hidden by default; enable **Show Finish flight
+control** when manual completion is useful. Manual completion does not invent a
+landing time. See the [card guide](docs/dashboard-cards.md) for these settings,
+colours and folding, and the [tracking guide](docs/tracking.md) for timing defaults
+and shutdown safeguards.
+
+For an existing YAML itinerary package, follow the
+[migration checklist](docs/package-migration.md) before enabling automatic controls.
+Keep exactly one tracking/shutdown owner. Badge presentation, notifications and
+existing map entities remain in your Home Assistant configuration.
+
+## Documentation
+
+| Topic | Guide |
+| --- | --- |
+| Actions, entities, FR24 connection, airport refresh and daylight-saving times | [Configuration and usage](docs/configuration.md) |
+| Card installation, options, colour rules and mobile forms | [Dashboard cards](docs/dashboard-cards.md) |
+| Tracking windows, ownership, journeys, lifecycle events and storage | [Tracking reference](docs/tracking.md) |
+| Legacy package handoff, badge adapter and rollback | [Package migration](docs/package-migration.md) |
+| Reusable badge/notification examples and their dependencies | [Examples](examples/README.md) |
+| Tests, Windows/Linux workflows, airport-data maintenance and releases | [Contributing](CONTRIBUTING.md) |
+| Source, deployment and legacy repository boundaries | [Repository ownership](docs/architecture/repository-ownership.md) |
+
+## Update and recovery
+
+Back up HA configuration and itinerary storage before an upgrade. Update through
+HACS, or replace the complete integration directory for a manual installation,
+then restart Core and reload the dashboard. The cards update with the integration;
+no separate card update is needed. Existing trip IDs and schedules are retained.
+
+If an update fails, disable AaFI's automatic controls, restore the previous
+complete integration and its matching resource URL, and restart. A downgrade to
+code predating the lifecycle ledger may require the corresponding storage backup.
+See [storage compatibility](docs/tracking.md#storage-compatibility). Do not
+hand-edit HA storage while Core is running.
+
+Removing the integration entry does not delete saved trips. Use its explicit
+clear/delete actions when you intend to remove history. See the configuration
+guide for manual completion and recovery of the bundled airport dataset.
 
 ## License
 
-Integration source is MIT licensed; third-party airport data retains its
-upstream MIT notice in `LICENSES/`.
+Integration and bundled card source are [MIT licensed](LICENSE). Bundled airport
+data comes from `mwgg/Airports`; [NOTICE.md](NOTICE.md) records provenance and
+third-party licences.

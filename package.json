@@ -1,0 +1,11 @@
+{
+  "name": "ha-airport-itinerary",
+  "private": true,
+  "scripts": {
+    "test": "node --test card.test.cjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0"
+  }
+}

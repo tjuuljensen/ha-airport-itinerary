@@ -1,6 +1,16 @@
 * text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 *.py text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
+*.jinja text eol=lf
+*.ini text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.svg text eol=lf
+*.png binary

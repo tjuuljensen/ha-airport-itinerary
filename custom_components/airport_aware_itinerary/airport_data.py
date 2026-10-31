@@ -7,11 +7,26 @@ from functools import lru_cache
 
 from .const import AIRPORTS_FILE
 
+_active: dict | None = None
+
+
+def data_payload() -> dict:
+    return _active if _active is not None else json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+
+
+def set_active_data(payload: dict | None) -> None:
+    """Swap a completely validated dataset; saved flight timestamps are untouched."""
+    global _active
+    _active = payload
+    get_airport_timezones.cache_clear()
+    get_airport_cities.cache_clear()
+    get_airport_coordinates.cache_clear()
+
 
 @lru_cache(maxsize=1)
 def get_airport_timezones() -> dict[str, str]:
     """Return IATA-to-IANA mappings packaged with the integration."""
-    payload = json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+    payload = data_payload()
     mappings = payload.get("airports")
     if not isinstance(mappings, dict):
         raise ValueError("Bundled airport timezone data is malformed.")
@@ -29,7 +44,7 @@ def get_airport_timezones() -> dict[str, str]:
 @lru_cache(maxsize=1)
 def get_airport_cities() -> dict[str, str]:
     """Return IATA-to-city names packaged with the integration."""
-    payload = json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+    payload = data_payload()
     cities = payload.get("airport_cities", {})
     if not isinstance(cities, dict):
         raise ValueError("Bundled airport city data is malformed.")
@@ -47,7 +62,7 @@ def get_airport_cities() -> dict[str, str]:
 @lru_cache(maxsize=1)
 def get_airport_coordinates() -> dict[str, dict[str, float]]:
     """Return validated IATA-to-coordinate mappings for route progress."""
-    payload = json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+    payload = data_payload()
     coordinates = payload.get("airport_coordinates", {})
     if not isinstance(coordinates, dict):
         raise ValueError("Bundled airport coordinate data is malformed.")
@@ -69,5 +84,5 @@ def get_airport_coordinates() -> dict[str, dict[str, float]]:
 
 def get_data_metadata() -> dict[str, object]:
     """Return source revision metadata for diagnostics and entity attributes."""
-    payload = json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+    payload = data_payload()
     return payload.get("metadata", {})

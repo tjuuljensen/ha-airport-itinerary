@@ -1,0 +1,53 @@
+{# Badge-only adapter for Airport Itinerary integration attributes.
+   Copy to /config/custom_templates/flight_itinerary_adapter.jinja.
+   Called by flight_itinerary_display_adapter.yaml; no tracking side effects.
+   Keeps the legacy badge data shape, including optional plane-map attributes.
+#}
+
+{% macro display_model(journeys, itineraries, tracked, enabled, fetching, now_ts, before=0.5, after=2) -%}
+  {% set selection = namespace(active=[], upcoming=[]) %}
+  {% for journey in journeys | sort(attribute='id') | sort(attribute='departure_at') %}
+    {% set departure = as_timestamp(journey.departure_at, 0) %}
+    {% set touchdown = as_timestamp(journey.touchdown_at, 0) %}
+    {% set arrival = as_timestamp(journey.arrival_at, 0) %}
+    {% set begin = departure - before * 3600 %}
+    {% set end = touchdown + after * 3600 if touchdown else arrival + after * 3600 if arrival else as_timestamp(journey.expires_at, 0) %}
+    {% if enabled and begin <= now_ts < end and (not journey.completed or touchdown) %}
+      {% set item = dict(journey, badge_start=begin, badge_end=end) %}
+      {% if departure <= now_ts %}
+        {% set selection.active = selection.active + [item] %}
+      {% else %}
+        {% set selection.upcoming = selection.upcoming + [item] %}
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% set candidates = selection.active + selection.upcoming %}
+  {% set journey = candidates[0] if candidates else {} %}
+  {% set trip = itineraries | selectattr('id', 'eq', journey.get('itinerary_id', '')) | list | first | default({}) %}
+  {% set rows = trip.get('legs', []) | selectattr('id', 'in', journey.get('leg_ids', [])) | sort(attribute='departure.utc_timestamp') | list %}
+  {% set pick = namespace(leg={}, next={}, prior=false) %}
+  {% for leg in rows | sort(attribute='departure.utc_timestamp') %}
+    {% set evidence = leg.get('evidence', {}) %}
+    {% set done = leg.get('completed', false) or leg.get('finished_at') or evidence.get('touchdown') or evidence.get('actual_arrival') or evidence.get('gate_arrival') %}
+    {% if not done and not pick.leg %}{% set pick.leg = leg %}{% endif %}
+    {% if not done and as_timestamp(leg.departure.utc_timestamp, 0) > now_ts and not pick.next %}{% set pick.next = leg %}{% endif %}
+    {% if done %}{% set pick.prior = true %}{% endif %}
+  {% endfor %}
+  {% set leg = pick.leg or (rows[-1] if rows else {}) %}
+  {% set matches = tracked | selectattr('itinerary_id', 'eq', trip.get('id', '')) | selectattr('leg_id', 'eq', leg.get('id', '')) | list %}
+  {% set live = matches[0] if matches else {} %}
+  {% set dep = as_timestamp(leg.get('departure', {}).get('utc_timestamp'), 0) %}
+  {% set arr = as_timestamp((leg.get('arrival') or {}).get('utc_timestamp'), 0) %}
+  {% set touchdown = as_timestamp(journey.get('touchdown_at'), 0) %}
+  {% set fresh = fetching and live.get('is_live', false) and 0 <= now_ts - as_timestamp(live.get('position_updated_at'), 0) <= 300 %}
+  {% set airborne = fresh and live.get('on_ground') == false and live.get('on_ground') is not none and not leg.get('finished_at') %}
+  {% set status = 'disabled' if not enabled else 'idle' if not journey else 'arrived' if touchdown else 'airborne' if airborne else 'connection' if pick.prior and pick.next else 'preflight' if now_ts < dep else 'in_transit' %}
+  {% set evidence = leg.get('evidence', {}) %}
+  {% set details = dict(live, airport_origin_code_iata=leg.get('origin_airport', ''), airport_destination_code_iata=leg.get('destination_airport', ''), landing=as_timestamp(evidence.get('touchdown'), 0)) %}
+  {{ dict(status=status, badge_active=journey | count > 0, badge_start=journey.get('badge_start'), badge_end=journey.get('badge_end'),
+      itinerary_name=trip.get('name', ''), journey_id=journey.get('id'), completion_source=journey.get('completion_source', 'schedule'),
+      schedule_only=not fresh, flight=dict(flight_number=leg.get('flight_number', ''), departure=dep, arrival=arr, landed=touchdown, data=details),
+      next_flight=dict(departure=as_timestamp(pick.next.get('departure', {}).get('utc_timestamp'), 0)),
+      position_fresh=airborne and live.get('latitude') is not none and live.get('longitude') is not none,
+      latitude=live.get('latitude') if fresh else none, longitude=live.get('longitude') if fresh else none) | to_json }}
+{%- endmacro %}

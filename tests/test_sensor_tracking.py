@@ -74,6 +74,13 @@ def test_scheduled_record_is_matched_but_not_marked_live():
     assert matches[0]["is_live"] is False
 
 
+def test_numeric_on_ground_is_normalized_for_dashboard():
+    live = {"flight_number": "SK935", "tracked_type": "live", "on_ground": 0,
+            "time_scheduled_departure": "2026-10-23T10:00:00+00:00"}
+    matches = FlightItinerariesSensor._match_tracked_legs([{"id": "trip", "legs": [_leg()]}], _source([live]))
+    assert matches[0]["on_ground"] is False
+
+
 def test_unavailable_or_unsupported_sources_do_not_match():
     itinerary = [{"id": "trip-1", "legs": [_leg()]}]
 

@@ -14,17 +14,30 @@
     "step": {
       "init": {
         "title": "Optional flight tracking",
-        "description": "Select a Flightradar24 additional-tracked sensor for live data. Optionally send upcoming itinerary flight numbers to the integration's Add to track text entity.",
+        "description": "Turn off FR24 connection for schedule-only use. All entity selections and automatic-control preferences are retained. Disconnecting does not switch off FR24 itself or remove tracked flights. Select entities from one FR24 entry when connected.",
         "data": {
           "tracked_flights_entity": "Flightradar24 additional-tracked sensor",
           "fr24_auto_track": "Automatically add itinerary flights to FR24 tracking",
-          "fr24_add_to_track_entity": "Flightradar24 Add to track entity"
-        },
-        "error": {
-          "select_add_to_track_entity": "Select the Flightradar24 Add to track text entity to enable automatic tracking.",
-          "select_tracked_flights_entity": "Select the Flightradar24 Additional Tracked sensor to avoid adding flights that are already tracked."
+          "fr24_add_to_track_entity": "Flightradar24 Add to track entity",
+          "fr24_remove_from_track_entity": "Flightradar24 Remove from track entity",
+          "fr24_api_switch": "Flightradar24 API fetching switch",
+          "fr24_auto_cleanup": "Clean up integration-owned tracked flights",
+          "fr24_auto_enable": "Enable fetching before journeys",
+          "fr24_auto_disable": "Shut down fetching sessions started by this integration",
+          "connection_hours": "Maximum connection (hours)",
+          "api_before_minutes": "Enable fetching before departure (minutes)",
+          "api_after_hours": "Keep fetching after final touchdown (hours)",
+          "cleanup_after_hours": "Remove tracked flight after touchdown (hours)",
+          "fr24_connection_enabled": "Enable FR24 connection"
         }
       }
+    },
+    "error": {
+      "select_add_to_track_entity": "Select the Flightradar24 Add to track text entity to enable automatic tracking.",
+      "select_tracked_flights_entity": "Select the Flightradar24 Additional Tracked sensor to avoid adding flights that are already tracked.",
+      "select_remove_entity": "Select the FR24 Remove from track entity.",
+      "select_api_switch": "Select the FR24 API fetching switch.",
+      "different_fr24_entry": "Select registered entities belonging to the same Flightradar24 configuration entry."
     }
   },
   "entity": {

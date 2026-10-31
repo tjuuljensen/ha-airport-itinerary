@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import EVENT_UPDATED
+from .lifecycle import occurrence, timestamp, iso
 
 class ItineraryManager:
     """Manage and persist named itineraries and their flight legs."""
@@ -24,7 +26,7 @@ class ItineraryManager:
     @staticmethod
     def _validate_saved(saved: dict[str, Any] | None) -> dict[str, Any]:
         if saved is None:
-            return {"itineraries": []}
+            return {"itineraries": [], "lifecycle": {}, "schema_version": 2}
         if not isinstance(saved, dict) or not isinstance(saved.get("itineraries"), list):
             return {"itineraries": []}
         itineraries = [
@@ -35,11 +37,56 @@ class ItineraryManager:
             and isinstance(item.get("name"), str)
             and isinstance(item.get("legs"), list)
         ]
-        return {"itineraries": itineraries}
+        return {"itineraries": itineraries, "schema_version": 2,
+                "lifecycle": saved.get("lifecycle", {}) if isinstance(saved.get("lifecycle"), dict) else {}}
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Return a copy-safe view of stored itineraries."""
-        return [dict(item, legs=[dict(leg) for leg in item["legs"]]) for item in self._data["itineraries"]]
+        return deepcopy(self._data["itineraries"])
+
+    def lifecycle_snapshot(self) -> dict:
+        return deepcopy(self._data.get("lifecycle", {}))
+
+    async def async_update_lifecycle(self, state: dict, evidence: dict) -> None:
+        """Commit observations and event receipts before publishing transitions."""
+        changed = state != self._data.get("lifecycle", {})
+        self._data["lifecycle"] = deepcopy(state)
+        events = []
+        for trip in self._data["itineraries"]:
+            for leg in trip["legs"]:
+                observed = evidence.get(occurrence(leg), {})
+                saved = leg.setdefault("evidence", {})
+                for kind, value in observed.items():
+                    if kind in saved or not timestamp(value):
+                        continue
+                    saved[kind] = value
+                    changed = True
+                    if kind != "actual_arrival":
+                        events.append({"itinerary_id": trip["id"], "itinerary_name": trip["name"],
+                                       "leg_id": leg["id"], "flight_number": leg["flight_number"],
+                                       "occurrence": occurrence(leg), "event": kind, "event_time": value,
+                                       "evidence_source": "manual" if kind == "manual_completion" else "inferred" if kind == "inferred_completion" else "fr24"})
+                finished = next((saved[key] for key in ("gate_arrival", "actual_arrival", "touchdown") if saved.get(key)), None)
+                if finished and finished != leg.get("finished_at"):
+                    leg["finished_at"] = finished
+                    changed = True
+                if saved.get("manual_completion") or saved.get("inferred_completion"):
+                    leg["completed"] = True
+        if changed:
+            await self._store.async_save(self._data)
+            for event in events:
+                self._hass.bus.async_fire("airport_aware_itinerary_flight_event", event)
+            self._fire_updated()
+
+    async def async_mark_flight_completed(self, itinerary_id: str, leg_id: str) -> dict:
+        trip = self._find(itinerary_id)
+        leg = next((row for row in trip["legs"] if row["id"] == leg_id), None) if trip else None
+        if leg is None:
+            return {"success": False, "error": "Flight leg was not found."}
+        await self.async_update_lifecycle(self.lifecycle_snapshot(), {
+            occurrence(leg): {"manual_completion": iso(datetime.now(timezone.utc).timestamp())}
+        })
+        return {"success": True, "itinerary": deepcopy(trip)}
 
     async def async_create_itinerary(self, name: str) -> dict[str, Any]:
         """Create a named itinerary and persist it."""
@@ -67,35 +114,6 @@ class ItineraryManager:
         await self._store.async_save(self._data)
         self._fire_updated()
         return {"success": True, "itinerary": itinerary, "leg": normalized}
-
-    async def async_record_finished_at(
-        self, itinerary_id: str, leg_id: str, finished_at: str
-    ) -> bool:
-        """Persist the latest confirmed completion time for a flight leg."""
-        itinerary = self._find(itinerary_id)
-        if itinerary is None:
-            return False
-        leg = next(
-            (item for item in itinerary["legs"] if item.get("id") == leg_id), None
-        )
-        if leg is None:
-            return False
-        try:
-            candidate = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
-            current_value = leg.get("finished_at")
-            current = (
-                datetime.fromisoformat(current_value.replace("Z", "+00:00"))
-                if isinstance(current_value, str)
-                else None
-            )
-        except ValueError:
-            return False
-        if candidate.tzinfo is None or (current is not None and current >= candidate):
-            return False
-        leg["finished_at"] = candidate.astimezone(timezone.utc).isoformat(timespec="seconds")
-        await self._store.async_save(self._data)
-        self._fire_updated()
-        return True
 
     async def async_remove_flight(self, itinerary_id: str, leg_id: str) -> dict[str, Any]:
         """Remove a flight leg from an itinerary."""

@@ -95,6 +95,14 @@ add_flight:
       required: false
       selector:
         text:
+    arrival_fold:
+      name: Repeated arrival-time occurrence
+      description: Choose earlier or later when the destination clock repeats the arrival time.
+      selector:
+        select:
+          options:
+            - earlier
+            - later
     label:
       name: Label
       required: false
@@ -150,3 +158,24 @@ rename_itinerary:
       required: true
       selector:
         text:
+
+mark_flight_completed:
+  name: Mark flight completed
+  description: Manually complete a leg without claiming an observed landing or gate arrival.
+  fields:
+    itinerary_id:
+      required: true
+      selector:
+        text:
+    leg_id:
+      required: true
+      selector:
+        text:
+
+refresh_airport_data:
+  name: Refresh airport data
+  description: Download and validate the latest mwgg/Airports revision, retaining the current map on failure.
+
+restore_bundled_airport_data:
+  name: Restore bundled airport data
+  description: Discard the downloaded airport cache and use the map included in this release.

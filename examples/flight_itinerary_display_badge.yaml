@@ -1,0 +1,195 @@
+# Priority-managed badge. Paste into the dashboard's display-badge area.
+# Requires the badge adapter and existing shared display_badge templates.
+# See ../docs/package-migration.md.
+type: conditional
+conditions:
+  - condition: state
+    entity: input_boolean.flight_itinerary_display_active
+    state: 'on'
+card:
+  type: custom:button-card
+  template:
+    - display_badge
+    - display_badge_image
+  entity: sensor.flight_itinerary_display
+  show_name: false
+  show_icon: true
+  show_state: true
+  show_label: true
+  show_units: false
+  variables:
+    # Layout options: hide rows instead of deleting their rendering logic.
+    show_title: true
+    title_mode: route # route, leg, flight, destination, custom, or none
+    title_text: ''
+    show_timing_label: true
+    icon_size: auto # auto uses the display_badge template's proportional size
+    bottom_padding: 12%
+    timing_phase: |
+      [[[
+        if (entity?.state === 'arrived') return 'landed';
+        if (entity?.state === 'connection') return 'connection';
+        if (['airborne', 'in_transit'].includes(entity?.state)) return 'arrival';
+        return 'departure';
+      ]]]
+    status_color: |
+      [[[
+        const state = entity?.state;
+        if (state === 'preflight' || state === 'in_transit') return 'var(--state-active-color)';
+        if (state === 'airborne') return 'var(--info-color)';
+        if (state === 'connection' || state === 'arrived') return 'var(--success-color)';
+        if (state === 'invalid' || state === 'error') return 'var(--error-color)';
+        if (state === 'disabled') return 'var(--disabled-text-color)';
+        return 'var(--primary-color)';
+      ]]]
+    background_image: |
+      [[[
+        return entity?.attributes?.data?.badge_active
+          ? null : '/local/assets/brands/transit/flightradar24.png';
+      ]]]
+  icon: |
+    [[[
+      const d = entity?.attributes?.data;
+      if (!d?.badge_active) return 'mdi:blank';
+      if (['airborne', 'in_transit'].includes(entity.state)) return 'mdi:airplane';
+      if (entity.state === 'arrived') return 'mdi:airplane-landing';
+      if (entity.state === 'connection') return 'mdi:airport';
+      return 'mdi:airplane-takeoff';
+    ]]]
+  label: |
+    [[[
+      if (!entity?.attributes?.data?.badge_active) return '';
+      return {
+        departure: 'Scheduled departure in',
+        arrival: entity.attributes.data.schedule_only ? 'Scheduled arrival in' : 'Arrival in',
+        connection: 'Next flight in',
+        landed: 'Landed'
+      }[variables.timing_phase] || '';
+    ]]]
+  state_display: |
+    [[[
+      const d = entity?.attributes?.data;
+      if (!d?.badge_active) {
+        const state = states['switch.flightradar24_api_data_fetching']?.state;
+        return { on: 'On', off: 'Off', unknown: 'Unknown', unavailable: 'Unavailable' }[state] || 'Unavailable';
+      }
+      const f = d.flight || {};
+      const a = f.data || {};
+      const now = Date.now() / 1000;
+      const duration = (minutes) => {
+        const m = Math.max(0, minutes);
+        if (m < 60) return `${m}m`;
+        return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`;
+      };
+      if (variables.timing_phase === 'landed') {
+        const landed = Number(a.landing) || Number(f.landed);
+        return landed > 0 ? `${duration(Math.floor((now - landed) / 60))} ago` : '--';
+      }
+      let target;
+      if (variables.timing_phase === 'arrival') {
+        target = Number(a.time_estimated_arrival) || Number(a.time_scheduled_arrival) || Number(f.arrival);
+      } else if (variables.timing_phase === 'connection') {
+        target = Number(d.next_flight?.departure);
+      } else {
+        target = Number(f.departure);
+      }
+      if (!(target > 0)) return '--';
+      const minutes = Math.ceil((target - now) / 60);
+      return minutes < 0 ? 'Due' : duration(minutes);
+    ]]]
+  custom_fields:
+    title: |
+      [[[
+        if (variables.show_title === false || variables.title_mode === 'none') return '';
+        if (variables.title_mode === 'custom') return String(variables.title_text || '');
+        const d = entity?.attributes?.data;
+        if (!d?.badge_active) return 'FlightRadar24';
+        const f = d.flight || {};
+        const a = f.data || {};
+        if (variables.title_mode === 'flight') return f.flight_number || 'Itinerary';
+        const origin = a.airport_origin_code_iata;
+        const destination = a.airport_destination_code_iata;
+        if (variables.title_mode === 'leg') {
+          return origin && destination ? `${origin}-${destination}` : f.flight_number || 'Itinerary';
+        }
+        if (variables.title_mode === 'destination') {
+          return destination || f.flight_number || 'Itinerary';
+        }
+        return origin && destination
+          ? `${origin} → ${destination}`
+          : f.flight_number || 'Itinerary';
+      ]]]
+    time: ''
+  styles:
+    card:
+      - padding: |
+          [[[ return `8% 8% ${variables.bottom_padding || '12%'}`; ]]]
+      - background-color: |
+          [[[
+            return entity?.attributes?.data?.badge_active ? 'var(--ha-card-background, var(--card-background-color))' : '';
+          ]]]
+      - border: |
+          [[[
+            return entity?.attributes?.data?.badge_active ? `2px solid ${variables.status_color}` : '';
+          ]]]
+    grid:
+      - grid-template-areas: |
+          [[[
+            return '"title" "i" "l" "s"';
+          ]]]
+      - grid-template-columns: 1fr
+      - grid-template-rows: |
+          [[[
+            const rows = [];
+            rows.push('min-content');
+            rows.push(!variables.icon_size || variables.icon_size === 'auto'
+              ? 'minmax(0, 1fr)' : `minmax(${variables.icon_size}, 1fr)`);
+            rows.push('min-content');
+            rows.push('min-content');
+            return rows.join(' ');
+          ]]]
+      - row-gap: 1px
+    img_cell:
+      - min-height: |
+          [[[ return !variables.icon_size || variables.icon_size === 'auto' ? '0' : variables.icon_size; ]]]
+      - overflow: visible
+      - align-self: center
+    icon:
+      - width: |
+          [[[ return !variables.icon_size || variables.icon_size === 'auto' ? '80%' : variables.icon_size; ]]]
+      - height: |
+          [[[ return !variables.icon_size || variables.icon_size === 'auto' ? '80%' : variables.icon_size; ]]]
+      - color: |
+          [[[
+            return variables.status_color;
+          ]]]
+    label:
+      - font-size: 9px
+      - white-space: nowrap
+      - color: var(--primary-text-color)
+      - visibility: |
+          [[[ return variables.show_timing_label === false ? 'hidden' : 'visible'; ]]]
+    state:
+      - font-size: 11px
+      - white-space: nowrap
+      - color: var(--secondary-text-color)
+    custom_fields:
+      title:
+        - display: |
+            [[[
+              return variables.show_title === false || variables.title_mode === 'none' ? 'none' : 'block';
+            ]]]
+        - position: static
+        - font-size: 9px
+        - white-space: nowrap
+        - color: var(--primary-text-color)
+      time:
+        - display: none
+  tap_action:
+    action: navigate
+    navigation_path: /lovelace-phone/flightradar
+  hold_action:
+    action: call-service
+    service: switch.toggle
+    service_data:
+      entity_id: switch.flightradar24_api_data_fetching

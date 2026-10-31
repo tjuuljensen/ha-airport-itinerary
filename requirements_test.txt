@@ -1,3 +1,4 @@
 pytest
-pytest-homeassistant-custom-component
+pytest-homeassistant-custom-component==0.13.316
+home-assistant-frontend==20260128.6
 timezonefinder==9.1.0
