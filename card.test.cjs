@@ -182,7 +182,7 @@ test("schedule editor exposes all supported options and preserves unknown config
 });
 
 
-test("itineraries sort newest first departure first without mutating source", () => {
+test("itineraries sort earliest departure first without mutating source", () => {
   const { api } = loadCard();
   const leg = (date) => ({ departure: { utc_timestamp: date } });
   const trips = [
@@ -193,7 +193,7 @@ test("itineraries sort newest first departure first without mutating source", ()
     { id: "invalid", legs: [leg("not a date")] },
   ];
   const original = JSON.stringify(trips);
-  assert.deepEqual(Array.from(api.sortItineraries(trips), x => x.id), ["newest", "tie", "older", "empty", "invalid"]);
+  assert.deepEqual(Array.from(api.sortItineraries(trips), x => x.id), ["older", "newest", "tie", "empty", "invalid"]);
   assert.equal(JSON.stringify(trips), original);
 });
 

@@ -63,7 +63,7 @@ and both cards together.
 These steps follow HACS's [custom repository procedure](https://hacs.dev/docs/faq/custom_repositories/).
 There is no separate Dashboard repository or card download to install.
 
-Select release **0.3.7** or later for the consolidated integration and cards.
+Select release **0.3.8** or later for the consolidated integration and cards.
 AaFI is installed through HACS's custom repository feature; inclusion in the
 default HACS catalogue is separate. See [release notes](CHANGELOG.md) for changes.
 
@@ -103,7 +103,7 @@ title: Itinerary
 The cards discover the itinerary sensor. Set `entity` explicitly if needed,
 using the ID registered in your installation. `initial_fold: true` starts the
 input card collapsed for a compact dashboard; expand it when you want to add a
-flight. The itinerary dropdown is sorted by trip start time, newest first.
+flight. The itinerary dropdown is sorted by trip start time, earliest first.
 
 If you explicitly manage **Lovelace resources in YAML**, add the module entry
 shown in the [card guide](docs/dashboard-cards.md#install-with-aafi); AaFI cannot

@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.7 bundles card version 1.6.7. Follow the
+AaFI 0.3.8 bundles card version 1.6.8. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.7
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.8
       type: module
 ```
 
@@ -157,12 +157,12 @@ asks you to confirm manual completion of a leg. It stops automatic additions and
 owned tracking cleanup, without claiming a confirmed landing. Manual and inferred
 completion are labelled separately.
 
-Itinerary dropdowns show the newest first departure first, with undated trips last.
+Itinerary dropdowns show the earliest first departure first, with undated trips last.
 The schedule card automatically selects an active journey first, otherwise the
 nearest upcoming journey. If all journeys are finished or undated, it falls back
-to the newest listed itinerary. An explicit dropdown selection stays selected
+to the first listed itinerary. An explicit dropdown selection stays selected
 until the card is reloaded or that itinerary is removed. A configured
-`itinerary_id` always takes precedence. Dropdown ordering remains newest first.
+`itinerary_id` always takes precedence. Dropdown ordering remains earliest first.
 
 A number-only scheduled watch displays **Added to FR24—waiting for flight details**.
 This acknowledges the FR24 watch without treating it as a confirmed dated match.

@@ -258,9 +258,9 @@ test('dropdowns sort by departure while preserving selections and drafts', async
   });
   const input = page.locator('airport-itinerary-input #trip');
   const schedule = page.locator('airport-itinerary-schedule #trip');
-  expect(await input.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['', 'newest', 'older', 'trip']);
-  expect(await schedule.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['newest', 'older', 'trip']);
-  expect(await page.evaluate(() => editor._itineraryOptions().map(row => row.value))).toEqual(['', 'newest', 'older', 'trip']);
+  expect(await input.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['', 'older', 'newest', 'trip']);
+  expect(await schedule.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['older', 'newest', 'trip']);
+  expect(await page.evaluate(() => editor._itineraryOptions().map(row => row.value))).toEqual(['', 'older', 'newest', 'trip']);
   await expect(input).toHaveValue('trip');
   await expect(page.locator('#number')).toHaveValue('SK935');
   await schedule.selectOption('older');
@@ -269,7 +269,7 @@ test('dropdowns sort by departure while preserving selections and drafts', async
     card.hass = { ...hass }; schedule.hass = { ...hass };
     schedule.shadowRoot.activeElement?.blur(); schedule.render();
   });
-  expect(await input.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['', 'older', 'newest', 'trip']);
+  expect(await input.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['', 'newest', 'older', 'trip']);
   await expect(input).toHaveValue('trip');
   await expect(schedule).toHaveValue('older');
   await expect(page.locator('#number')).toHaveValue('SK935');
@@ -314,7 +314,7 @@ test('schedule defaults to active then upcoming without reordering or overriding
   });
   const select = page.locator('airport-itinerary-schedule #trip');
   await expect(select).toHaveValue('active');
-  expect(await select.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['latest', 'next', 'active']);
+  expect(await select.locator('option').evaluateAll(rows => rows.map(row => row.value))).toEqual(['active', 'next', 'latest']);
   await page.evaluate(() => {
     hass.states['sensor.flight_itineraries'].attributes.journeys[0].completed = true;
     schedule.hass = { ...hass };

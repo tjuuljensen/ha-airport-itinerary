@@ -101,4 +101,3 @@ def build_maps(source: bytes) -> tuple[dict[str, str], dict[str, str], dict[str,
         for point in points
     }
     return result, cities, coordinates
-

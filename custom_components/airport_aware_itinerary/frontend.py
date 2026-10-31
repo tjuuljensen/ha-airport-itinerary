@@ -11,7 +11,7 @@ from homeassistant.components.lovelace import LOVELACE_DATA
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-CARD_VERSION = "1.6.7"
+CARD_VERSION = "1.6.8"
 CARD_PATH = Path(__file__).parent / "www" / "airport-itinerary.js"
 CARD_URL = "/airport_aware_itinerary/airport-itinerary.js"
 RESOURCE_URL = f"{CARD_URL}?v={CARD_VERSION}"

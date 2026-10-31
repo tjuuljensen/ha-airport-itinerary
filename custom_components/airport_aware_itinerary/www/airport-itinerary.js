@@ -1,6 +1,6 @@
 const DOMAIN = "airport_aware_itinerary";
 const DEFAULT_ENTITY = "sensor.flight_itineraries";
-const CARD_VERSION = "1.6.7";
+const CARD_VERSION = "1.6.8";
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (char) =>
@@ -60,15 +60,15 @@ const currentAirportTime = (timezone, locale) => {
   }
 };
 
-// Order trips by their first scheduled departure; keep undated drafts last.
+// Order trips by earliest scheduled departure first; keep undated drafts last.
 const sortItineraries = (trips) => {
   const firstDeparture = (trip) => {
     const dates = (trip.legs || []).map((leg) => stamp(leg.departure?.utc_timestamp)).filter((date) => date != null);
-    return dates.length ? Math.min(...dates) : -Infinity;
+    return dates.length ? Math.min(...dates) : Infinity;
   };
   return [...trips].sort((a, b) => {
     const left = firstDeparture(a), right = firstDeparture(b);
-    return left === right ? String(a.id).localeCompare(String(b.id)) : left > right ? -1 : 1;
+    return left === right ? String(a.id).localeCompare(String(b.id)) : left < right ? -1 : 1;
   });
 };
 

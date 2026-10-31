@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.3.7 - 2026-10-31
+## 0.3.8 - 2026-10-31
 
-First consolidated AaFI release, including dashboard card version 1.6.7.
+First consolidated AaFI release, including dashboard card version 1.6.8.
 Requires Home Assistant 2026.2.3 or later.
 
 ### Integration and tracking
@@ -29,7 +29,7 @@ Requires Home Assistant 2026.2.3 or later.
 - Suggest arrival dates and prepare an unsaved reversed return-trip draft after
   saving a single outbound flight.
 - Select the active itinerary or nearest upcoming one by default; sort the dropdown
-  by itinerary start time, newest first, while preserving manual selection.
+  by itinerary start time, earliest first, while preserving manual selection.
 - Explain tracking state, distinguish live ground/airborne status and tolerate
   small browser/server clock differences to prevent status flicker.
 - Apply flight colours only to departure time, arrival time, status and progress.
