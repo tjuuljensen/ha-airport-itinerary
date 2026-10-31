@@ -163,10 +163,75 @@ async def test_touchdown_retention_and_gate_cleanup_persist_evidence(hass, setup
     await tracker.async_sync(NOW)
     assert len(calls) == 1
     assert manager.snapshot()[0]["legs"][0]["finished_at"] == iso(NOW - 60)
+    assert manager.snapshot()[0]["legs"][0]["arrival_phase"] == "landed"
+    assert not tracker.view["journeys"][0]["completed"]
+    assert tracker.view["journeys"][0]["arrival_pending"]
     hass.states.async_set(SOURCE, "1", {"flights": [flight(time_real_landing=NOW - 60, time_gate_arrival=NOW)]})
     await tracker.async_sync(NOW)
     assert calls[-1]["entity_id"] == REMOVE
+    assert manager.snapshot()[0]["legs"][0]["arrival_phase"] == "at_gate"
+    assert manager.snapshot()[0]["legs"][0]["final_arrival_at"] == iso(NOW)
+    assert tracker.view["journeys"][0]["completed"]
     assert tracker.view["journeys"][0]["api_stop_at"] == iso(NOW - 60 + 7200)
+
+
+async def test_real_arrival_waits_for_gate_flag_and_survives_restart(hass, setup_tracker):
+    tracker, manager, calls = setup_tracker()
+    events = []
+    unsubscribe = hass.bus.async_listen("airport_aware_itinerary_flight_event", lambda event: events.append(event.data))
+    await tracker.async_sync(NOW)
+    landed = flight(tracked_type="live", on_ground=True, has_landed=True,
+                    time_real_arrival=NOW - 600, gate_arrived_sent=False)
+    hass.states.async_set(SOURCE, "1", {"flights": [landed]})
+    await tracker.async_sync(NOW)
+    await hass.async_block_till_done()
+    stored = manager.snapshot()[0]["legs"][0]
+    assert stored["arrival_phase"] == "landed" and stored["final_arrival_at"] is None
+    assert tracker.view["journeys"][0]["status"] == "landed"
+    assert [event["event"] for event in events] == ["touchdown"]
+    assert len(calls) == 1  # Landing did not immediately remove the owned flight.
+    tracker.stop()
+    restarted, restored, _ = setup_tracker(saved=deepcopy(manager._data), flights=[])
+    await restarted.async_sync(NOW + 1)
+    assert restored.snapshot()[0]["legs"][0]["arrival_phase"] == "landed"
+    assert not restored.snapshot()[0]["legs"][0]["final_arrival_at"]
+    assert len(calls) == 1  # Do not add a disappeared landed flight again.
+    hass.states.async_set(SOURCE, "1", {"flights": [{**landed, "gate_arrived_sent": True}]})
+    await restarted.async_sync(NOW + 2)
+    await restarted.async_sync(NOW + 3)
+    await hass.async_block_till_done()
+    stored = restored.snapshot()[0]["legs"][0]
+    assert stored["final_arrival_at"] == iso(NOW + 2)  # Not the earlier landing time.
+    assert stored["arrival_phase"] == "at_gate"
+    assert [event["event"] for event in events] == ["touchdown", "gate_arrival"]
+    assert events[-1]["event_time"] == iso(NOW + 2)
+    restarted.stop()
+    again, restored, _ = setup_tracker(saved=deepcopy(restored._data), flights=[])
+    await again.async_sync(NOW + 4)
+    assert restored.snapshot()[0]["legs"][0]["arrival_phase"] == "at_gate"
+    unsubscribe()
+
+
+@pytest.mark.parametrize("flag", [False, "false", "true", 1, None])
+async def test_gate_flag_requires_boolean_confirmation(setup_tracker, flag):
+    tracker, manager, _ = setup_tracker(flights=[flight(gate_arrived_sent=flag)])
+    await tracker.async_sync(NOW)
+    assert manager.snapshot()[0]["legs"][0]["final_arrival_at"] is None
+
+
+async def test_stale_gate_flag_does_not_create_final_arrival(setup_tracker):
+    tracker, manager, _ = setup_tracker(flights=[flight(gate_arrived_sent=True)])
+    await tracker.async_sync(NOW + 301)
+    assert manager.snapshot()[0]["legs"][0]["final_arrival_at"] is None
+
+
+async def test_legacy_finished_timestamp_is_landing_not_gate(setup_tracker):
+    tracker, manager, _ = setup_tracker(rows=[leg(finished_at=iso(NOW - 60))])
+    await tracker.async_sync(NOW)
+    stored = manager.snapshot()[0]["legs"][0]
+    assert stored["finished_at"] == iso(NOW - 60)
+    assert stored["arrival_phase"] == "landed" and stored["final_arrival_at"] is None
+    assert not tracker.view["journeys"][0]["completed"]
 
 
 async def test_manual_completion_deduplicates_events_without_landing(hass, setup_tracker):

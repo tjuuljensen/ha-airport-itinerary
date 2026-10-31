@@ -27,7 +27,8 @@ card:
     bottom_padding: 12%
     timing_phase: |
       [[[
-        if (entity?.state === 'arrived') return 'landed';
+        if (entity?.state === 'arrived') return 'arrived';
+        if (['landed', 'taxiing'].includes(entity?.state)) return 'landed';
         if (entity?.state === 'connection') return 'connection';
         if (['airborne', 'in_transit'].includes(entity?.state)) return 'arrival';
         return 'departure';
@@ -37,7 +38,7 @@ card:
         const state = entity?.state;
         if (state === 'preflight' || state === 'in_transit') return 'var(--state-active-color)';
         if (state === 'airborne') return 'var(--info-color)';
-        if (state === 'connection' || state === 'arrived') return 'var(--success-color)';
+        if (['connection', 'landed', 'taxiing', 'arrived'].includes(state)) return 'var(--success-color)';
         if (state === 'invalid' || state === 'error') return 'var(--error-color)';
         if (state === 'disabled') return 'var(--disabled-text-color)';
         return 'var(--primary-color)';
@@ -52,7 +53,7 @@ card:
       const d = entity?.attributes?.data;
       if (!d?.badge_active) return 'mdi:blank';
       if (['airborne', 'in_transit'].includes(entity.state)) return 'mdi:airplane';
-      if (entity.state === 'arrived') return 'mdi:airplane-landing';
+      if (['landed', 'taxiing', 'arrived'].includes(entity.state)) return 'mdi:airplane-landing';
       if (entity.state === 'connection') return 'mdi:airport';
       return 'mdi:airplane-takeoff';
     ]]]
@@ -63,7 +64,8 @@ card:
         departure: 'Scheduled departure in',
         arrival: entity.attributes.data.schedule_only ? 'Scheduled arrival in' : 'Arrival in',
         connection: 'Next flight in',
-        landed: 'Landed'
+        landed: entity.state === 'taxiing' ? 'Taxiing to gate' : 'Landed · awaiting gate',
+        arrived: 'Final arrival · at gate'
       }[variables.timing_phase] || '';
     ]]]
   state_display: |
@@ -81,8 +83,8 @@ card:
         if (m < 60) return `${m}m`;
         return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`;
       };
-      if (variables.timing_phase === 'landed') {
-        const landed = Number(a.landing) || Number(f.landed);
+      if (['landed', 'arrived'].includes(variables.timing_phase)) {
+        const landed = variables.timing_phase === 'arrived' ? Number(a.gate_arrival) : Number(a.landing) || Number(f.landed);
         return landed > 0 ? `${duration(Math.floor((now - landed) / 60))} ago` : '--';
       }
       let target;

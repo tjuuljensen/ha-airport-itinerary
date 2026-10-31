@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import EVENT_UPDATED
-from .lifecycle import occurrence, timestamp, iso
+from .lifecycle import arrival_phase, occurrence, timestamp, iso
 
 class ItineraryManager:
     """Manage and persist named itineraries and their flight legs."""
@@ -42,7 +42,12 @@ class ItineraryManager:
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Return a copy-safe view of stored itineraries."""
-        return deepcopy(self._data["itineraries"])
+        trips = deepcopy(self._data["itineraries"])
+        for trip in trips:
+            for leg in trip["legs"]:
+                leg["arrival_phase"] = arrival_phase(leg)
+                leg["final_arrival_at"] = leg.get("evidence", {}).get("gate_arrival")
+        return trips
 
     def lifecycle_snapshot(self) -> dict:
         return deepcopy(self._data.get("lifecycle", {}))

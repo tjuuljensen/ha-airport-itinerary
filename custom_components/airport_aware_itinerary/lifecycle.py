@@ -86,8 +86,20 @@ def expires_at(leg: dict) -> float:
 
 def terminal(leg: dict) -> bool:
     evidence = leg.get("evidence", {})
-    return bool(leg.get("completed") or leg.get("finished_at") or any(evidence.get(key) for key in
-                ("touchdown", "gate_arrival", "actual_arrival", "inferred_completion", "manual_completion")))
+    return bool(leg.get("completed") or any(evidence.get(key) for key in
+                ("gate_arrival", "inferred_completion", "manual_completion")))
+
+
+def arrival_phase(leg: dict) -> str | None:
+    """Keep landing evidence distinct from the provider's final gate confirmation."""
+    evidence = leg.get("evidence", {})
+    if evidence.get("gate_arrival"):
+        return "at_gate"
+    if evidence.get("manual_completion") or evidence.get("inferred_completion") or leg.get("completed"):
+        return "completed"
+    if evidence.get("touchdown") or evidence.get("actual_arrival") or leg.get("finished_at"):
+        return "landed"
+    return None
 
 
 def journeys(itineraries: list[dict], now: float, options: dict) -> list[dict]:
@@ -116,6 +128,7 @@ def journeys(itineraries: list[dict], now: float, options: dict) -> list[dict]:
             touchdown = timestamp(evidence.get("touchdown")) or timestamp(evidence.get("actual_arrival")) or timestamp(evidence.get("gate_arrival")) or timestamp(last.get("finished_at"))
             stop = touchdown + grace if touchdown else max(expires_at(leg) for leg in group)
             all_completed = all(terminal(leg) for leg in group)
+            arrival_pending = any(arrival_phase(leg) == "landed" for leg in group)
             if all_completed and not touchdown:
                 stop = max(timestamp(leg.get("evidence", {}).get("manual_completion")) or timestamp(leg.get("evidence", {}).get("inferred_completion")) for leg in group) or stop
             airborne = any(leg.get("fresh_airborne") for leg in group)
@@ -125,10 +138,12 @@ def journeys(itineraries: list[dict], now: float, options: dict) -> list[dict]:
                 "leg_ids": [leg["id"] for leg in group], "departure_at": iso(departure),
                 "arrival_at": (last.get("arrival") or {}).get("utc_timestamp"),
                 "touchdown_at": iso(touchdown), "completed": all_completed,
+                "final_arrival_at": evidence.get("gate_arrival"),
+                "arrival_pending": arrival_pending,
                 "api_start_at": iso(departure - lead), "api_stop_at": None if airborne and now >= stop else iso(stop),
                 "expires_at": iso(max(expires_at(leg) for leg in group)),
                 "tracking_required": required, "airborne": airborne,
-                "status": "airborne" if airborne else "completed" if all_completed else "expired" if now >= stop else "active" if now >= departure else "scheduled",
-                "completion_source": "confirmed" if touchdown else "manual_or_inferred" if all_completed else "schedule",
+                "status": "airborne" if airborne else "completed" if all_completed else "expired" if now >= stop else "landed" if arrival_pending else "active" if now >= departure else "scheduled",
+                "completion_source": "confirmed" if all_completed and evidence.get("gate_arrival") else "manual_or_inferred" if all_completed else "schedule",
             })
     return sorted(result, key=lambda item: (item["departure_at"], item["id"]))

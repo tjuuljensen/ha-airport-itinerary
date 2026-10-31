@@ -175,6 +175,12 @@ class FR24ItineraryTracker:
                         value = next((timestamp(match.get(name)) for name in names if timestamp(match.get(name))), 0)
                         if value and value <= now + 60:
                             evidence.setdefault(kind, iso(value))
+                    # These sticky flags are observations, not timestamps. Never
+                    # reuse the landing time as the later gate observation time.
+                    if (match.get("has_landed") is True or evidence.get("actual_arrival")) and not evidence.get("touchdown"):
+                        evidence.setdefault("touchdown", evidence.get("actual_arrival") or iso(now))
+                    if match.get("gate_arrived_sent") is True:
+                        evidence.setdefault("gate_arrival", iso(now))
                     record["last_flight"] = {key: match[key] for key in (
                         "id", "flight_number", "callsign", "aircraft_registration", "tracked_type", "on_ground",
                         "airport_origin_code_iata", "airport_destination_code_iata", "time_scheduled_departure") if key in match}
@@ -256,7 +262,9 @@ class FR24ItineraryTracker:
                     await self._manager.async_update_lifecycle(state, {})
                     await self._call("text", "set_value", CONF_FR24_REMOVE_ENTITY, value=removal_number)
             departure = timestamp(leg.get("departure", {}).get("utc_timestamp"))
-            eligible = bool(legs and departure - 4 * 3600 <= now <= departure + 6 * 3600 and not any(terminal(row) for row in legs))
+            eligible = bool(legs and departure - 4 * 3600 <= now <= departure + 6 * 3600
+                            and not any(terminal(row) or row.get("finished_at") or row.get("evidence", {}).get("touchdown")
+                                        or row.get("evidence", {}).get("actual_arrival") for row in legs))
             already_listed = any(number(leg.get("flight_number")) in flight_numbers(f) for f in flights)
             if self.options.get(CONF_FR24_AUTO_TRACK) and healthy and fetching and eligible and not already_listed and number(leg["flight_number"]) not in requested and now - record.get("add_attempt_at", 0) >= RETRY_SECONDS:
                 record.update(pending_add=True, baseline=[identity(f) for f in flights], add_attempt_at=now)

@@ -85,6 +85,22 @@ journeys leave their active windows.
 
 ## Sensor data and events
 
+Arrival progresses independently of scheduled timing:
+
+- **Landed**: touchdown timestamps, `time_real_arrival`, the landing event or a
+  fresh `has_landed: true` observation establish landing, not final arrival.
+- **Taxiing**: a landed flight has fresh live ground data with positive speed.
+  Without fresh movement evidence the display remains landed, awaiting gate.
+- **At gate / final arrival**: a gate timestamp, the FR24 gate event or a fresh
+  `gate_arrived_sent: true` observation establishes final arrival. This reflects
+  the provider's gate detection, not independent airport confirmation.
+
+Flags without timestamps use their first observation time. Gate observation
+does not reuse an earlier `time_real_arrival` as its timestamp. Gate and landing
+events remain deduplicated across restart; loss of a record creates neither.
+Existing cleanup/API grace timers still bound tracking when no gate evidence
+arrives. Timer expiry does not turn landing into confirmed final arrival.
+
 Existing itinerary and tracked-leg attributes remain available. Additions:
 
 - `journeys`: deterministic IDs, itinerary/leg IDs, departure/arrival/touchdown,
@@ -93,7 +109,13 @@ Existing itinerary and tracked-leg attributes remain available. Additions:
   journeys, cleanup pending, session ownership, and last service error.
 - Leg `evidence`: departure, touchdown, gate arrival, actual arrival, inferred
   completion, or manual completion timestamps as observed. Existing
-  `finished_at` remains reserved for confirmed evidence.
+  `finished_at` remains reserved for confirmed evidence and may be a landing
+  timestamp for compatibility; it does not by itself prove gate arrival.
+- Leg `arrival_phase`: `landed`, `taxiing`, `at_gate`, `completed` (manual/inferred),
+  or null before arrival evidence. `final_arrival_at` is the gate timestamp only.
+- Journey `arrival_pending` identifies landed legs awaiting final arrival;
+  `completed` now requires gate, manual or inferred completion for every leg.
+  Journey `final_arrival_at` is the final leg's gate timestamp.
 
 `airport_aware_itinerary_flight_event` provides `event`, `itinerary_id`,
 `itinerary_name`, `leg_id`, `flight_number`, `occurrence`, `event_time`, and

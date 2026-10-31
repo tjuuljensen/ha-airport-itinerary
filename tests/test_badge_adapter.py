@@ -30,10 +30,32 @@ def test_badge_uses_configured_before_window(hass):
     assert not render(hass, [journey()], before=2, enabled=False)["badge_active"]
 
 
-def test_badge_touchdown_window_does_not_move_with_gate_arrival(hass):
+def test_badge_retains_arrival_colour_until_gate_based_retention_expires(hass):
     row = journey(departure_at=iso(NOW - 14400), touchdown_at=iso(NOW - 3600), completed=True)
     assert render(hass, [row], after=2)["badge_active"]
     assert not render(hass, [row], after=1)["badge_active"]
+    row["final_arrival_at"] = iso(NOW - 1800)
+    assert render(hass, [row], after=1)["badge_active"]
+    assert render(hass, [row], after=1)["status"] == "arrived"
+    assert not render(hass, [row], after=1, now=NOW + 1800)["badge_active"]
+
+
+def test_badge_distinguishes_landing_taxiing_and_gate(hass):
+    leg = {"id": "leg", "flight_number": "MS760", "departure": {"utc_timestamp": iso(NOW - 7200)},
+           "arrival": {"utc_timestamp": iso(NOW - 900)}, "finished_at": iso(NOW - 600),
+           "evidence": {"actual_arrival": iso(NOW - 600)}}
+    trip = {"id": "one", "name": "Trip", "legs": [leg]}
+    group = journey(departure_at=iso(NOW - 7200), touchdown_at=iso(NOW - 600), leg_ids=["leg"])
+    assert render(hass, [group], [trip])["status"] == "landed"
+    live = {"itinerary_id": "one", "leg_id": "leg", "is_live": True, "on_ground": True,
+            "ground_speed": 12, "position_updated_at": iso(NOW)}
+    assert render(hass, [group], [trip], [live])["status"] == "taxiing"
+    assert render(hass, [group], [trip], [live], now=NOW + 301)["status"] == "landed"
+    group["final_arrival_at"] = iso(NOW)
+    leg["evidence"]["gate_arrival"] = iso(NOW)
+    model = render(hass, [group], [trip])
+    assert model["status"] == "arrived"
+    assert model["flight"]["data"]["gate_arrival"] == NOW
 
 
 def test_active_journey_wins_and_ties_are_deterministic(hass):

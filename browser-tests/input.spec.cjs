@@ -352,7 +352,9 @@ test('live ground flight changes to airborne and arrival from provider evidence'
   await page.evaluate(() => { hass.states['sensor.flight_itineraries'].attributes.tracked_legs[0].on_ground = false; schedule.hass = { ...hass }; });
   await expect(page.locator('.badge')).toHaveText('Airborne');
   await page.evaluate(() => { Object.assign(hass.states['sensor.flight_itineraries'].attributes.tracked_legs[0], { on_ground: true, time_real_arrival: Date.now()/1000 }); schedule.hass = { ...hass }; });
-  await expect(page.locator('.badge')).toHaveText('Arrived');
+  await expect(page.locator('.badge')).toHaveText('Landed · awaiting gate');
+  await page.evaluate(() => { hass.states['sensor.flight_itineraries'].attributes.tracked_legs[0].gate_arrived_sent = true; schedule.hass = { ...hass }; });
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
 });
 
 
@@ -475,6 +477,7 @@ test('arrival colour requires landing evidence and survives tracked-record clean
   await page.evaluate(() => {
     const attrs = hass.states['sensor.flight_itineraries'].attributes;
     attrs.itineraries[0].legs[0].finished_at = new Date(Date.now() - 600000).toISOString();
+    attrs.itineraries[0].legs[0].evidence = { gate_arrival: attrs.itineraries[0].legs[0].finished_at };
     attrs.tracked_legs = [];
     schedule.setConfig({ finished_color: '#aabbcc' }); schedule.hass = { ...hass };
   });
@@ -489,3 +492,56 @@ test('arrival colour requires landing evidence and survives tracked-record clean
   });
   await expect(arrival).toHaveCSS('color', 'rgb(255, 255, 255)');
 });
+
+for (const width of [320, 390, 490]) {
+  test(`landing and gate colours survive cleanup at width ${width}`, async ({ page }, testInfo) => {
+    await mount(page);
+    await page.evaluate(width => {
+      card.remove();
+      const now = Date.now(), attrs = hass.states['sensor.flight_itineraries'].attributes;
+      attrs.itineraries[0].legs = [{ id: 'leg', flight_number: 'MS760', origin_airport: 'CPH', destination_airport: 'CAI',
+        departure: { utc_timestamp: new Date(now - 14400000).toISOString(), timezone: 'Europe/Copenhagen' },
+        arrival: { utc_timestamp: new Date(now - 1800000).toISOString(), timezone: 'Africa/Cairo' },
+        finished_at: new Date(now - 1200000).toISOString(),
+        evidence: { touchdown: new Date(now - 1200000).toISOString() } }];
+      attrs.tracked_legs = [{ itinerary_id: 'trip', leg_id: 'leg', is_live: true, on_ground: true,
+        has_landed: true, gate_arrived_sent: false, ground_speed: 12, position_updated_at: new Date(now).toISOString() }];
+      window.schedule = document.createElement('airport-itinerary-schedule');
+      schedule.style.width = `${width}px`;
+      schedule.style.display = 'block';
+      schedule.setConfig({ status_colors: { landed: '#ff8800', arrived: '#00ff00' }, finished_color: '#aabbcc',
+        finish_delay_seconds: 300, auto_collapse_after_minutes: 1 });
+      document.body.append(schedule); schedule.hass = hass;
+    }, width);
+    const badge = page.locator('.badge'), arrival = page.locator('.endpoint-time').last();
+    await expect(badge).toHaveText('Taxiing to gate');
+    await expect(arrival).toHaveCSS('color', 'rgb(255, 136, 0)');
+    await expect(page.locator('.leg-body')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`taxiing-${width}.png`) });
+    await page.evaluate(() => { hass.states['sensor.flight_itineraries'].attributes.tracked_legs = []; schedule.hass = { ...hass }; });
+    await expect(badge).toHaveText('Landed · awaiting gate');
+    await expect(arrival).toHaveCSS('color', 'rgb(255, 136, 0)');
+    await expect(page.locator('.progress-fill')).toHaveCSS('background-color', 'rgb(255, 136, 0)');
+    await page.evaluate(() => {
+      hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0].evidence.gate_arrival = new Date().toISOString();
+      schedule.hass = { ...hass };
+    });
+    await expect(badge).toHaveText('Final arrival · at gate');
+    await expect(badge).toHaveCSS('color', 'rgb(0, 255, 0)');
+    await expect(arrival).toHaveCSS('color', 'rgb(0, 255, 0)');
+    await expect(page.locator('.leg-body')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`at-gate-${width}.png`) });
+    expect(await page.locator('airport-itinerary-schedule').evaluate(el => el.shadowRoot.querySelector('.card').scrollWidth <= el.clientWidth)).toBeTruthy();
+    await page.evaluate(() => {
+      hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0].evidence.gate_arrival = new Date(Date.now() - 301000).toISOString();
+      schedule.hass = { ...hass };
+    });
+    await expect(arrival).toHaveCSS('color', 'rgb(170, 187, 204)');
+    await expect(page.locator('.leg-body')).toBeVisible();
+    await page.evaluate(() => {
+      hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0].evidence.gate_arrival = new Date(Date.now() - 361000).toISOString();
+      schedule.hass = { ...hass };
+    });
+    await expect(page.locator('.leg-body')).toBeHidden();
+  });
+}

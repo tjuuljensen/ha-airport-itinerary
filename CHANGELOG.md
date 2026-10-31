@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.10 - 2026-10-31
+
+Includes dashboard card version 1.6.10.
+
+- Distinguish landing, observed taxiing and final gate arrival. Read FR24's
+  `has_landed` and `gate_arrived_sent` flags and retain transition evidence across
+  restarts and provider cleanup. `time_real_arrival` alone does not confirm a gate.
+- Keep landing colours active while awaiting gate confirmation, then retain the
+  arrival colour until the configured finish delay. Start automatic collapse
+  from gate confirmation and preserve final arrival during automatic selection.
+- Expose `arrival_phase`, `arrival_pending` and `final_arrival_at` for consumers.
+  Update the reusable badge examples to show these transitions and retain final
+  arrival until their configured display window ends.
+
 ## 0.3.9 - 2026-10-31
 
 Includes dashboard card version 1.6.9.

@@ -228,6 +228,11 @@ test("default itinerary selection prefers active then nearest upcoming journeys"
   assert.equal(api.preferredItinerary(trips, journeys, now + 3600000).id, 'next');
   journeys[2].completed = true;
   assert.equal(api.preferredItinerary(trips, journeys, now).id, 'next');
+  journeys[2].final_arrival_at = iso(0);
+  assert.equal(api.preferredItinerary(trips, journeys, now).id, 'active');
+  assert.equal(api.preferredItinerary(trips, journeys, now + 300000).id, 'next');
+  assert.equal(api.preferredItinerary(trips, journeys, now + 300000, 600).id, 'active');
+  delete journeys[2].final_arrival_at;
   journeys[2].completed = false;
   journeys[2].expires_at = iso(-0.5);
   journeys[2].airborne = true;
@@ -270,8 +275,9 @@ test("live ground status is distinct from scheduled, airborne and completed", ()
   assert.equal(status([]), 'Scheduled');
   assert.equal(status([{ ...live, is_live: false }]), 'Scheduled');
   assert.equal(status([{ ...live, position_updated_at: new Date(now - 301000).toISOString() }]), 'Scheduled');
-  assert.equal(status([{ ...live, time_real_landing: now / 1000 }]), 'Landed');
-  assert.equal(status([{ ...live, time_real_arrival: now / 1000 }]), 'Arrived');
+  assert.equal(status([{ ...live, time_real_landing: now / 1000 }]), 'Landed · awaiting gate');
+  assert.equal(status([{ ...live, time_real_arrival: now / 1000 }]), 'Landed · awaiting gate');
+  assert.equal(status([{ ...live, gate_arrived_sent: true }]), 'Final arrival · at gate');
   assert.equal(status([live], { ...leg, completed: true, evidence: { manual_completion: true } }), 'Completed manually');
   const delayed = { ...leg, arrival: { ...leg.arrival, utc_timestamp: '2026-10-31T13:00:00Z' } };
   assert.equal(status([live], delayed), 'On ground');
@@ -291,4 +297,53 @@ test("freshness tolerates bounded server clock skew without extending stale data
   const tracked=[{itinerary_id:'trip',leg_id:'leg',is_live:true,on_ground:false,time_real_departure:now/1000-3600,position_updated_at:new Date(now+750).toISOString()}];
   assert.ok(card.renderLeg(trip,leg,0,tracked,now).includes(">Airborne</span>"));
   assert.equal(card.getFinishedAt(trip,tracked,now),null);
+});
+
+test("landing stays coloured and expanded until the final gate arrival timer", () => {
+  const { api } = loadCard();
+  const card = Object.create(api.AirportItinerarySchedule.prototype);
+  card._config = { finish_delay_seconds: 300, auto_collapse_after_minutes: 1, finished_color: '#aabbcc' };
+  card._legCollapseOverrides = new Map(); card._hass = { locale: { language: 'en-GB' } };
+  const now = Date.parse('2026-10-31T18:30:00Z');
+  const landing = new Date(now - 1800000).toISOString();
+  const leg = { id: 'leg', flight_number: 'MS760', finished_at: landing,
+    departure: { utc_timestamp: '2026-10-31T13:00:00Z', timezone: 'UTC' },
+    arrival: { utc_timestamp: '2026-10-31T18:00:00Z', timezone: 'UTC' },
+    evidence: { actual_arrival: landing, touchdown: landing } };
+  const trip = { id: 'trip', legs: [leg] };
+  const live = { itinerary_id: 'trip', leg_id: 'leg', is_live: true, on_ground: true,
+    has_landed: true, gate_arrived_sent: false, ground_speed: 12, position_updated_at: new Date(now).toISOString() };
+  let html = card.renderLeg(trip, leg, 0, [live], now);
+  assert.match(html, />Taxiing to gate<\/span>/);
+  assert.match(html, /background:var\(--airport-itinerary-status-landed\)/);
+  assert.doesNotMatch(html, /class="leg [^"]*(finished|finishing|completed)/);
+  assert.doesNotMatch(html, /class="leg-body" hidden/);
+  assert.equal(card.getFinishedAt(trip, [live], now), null);
+  // Loss of tracking and old finished_at values cannot promote landing to final arrival.
+  html = card.renderLeg(trip, leg, 0, [], now);
+  assert.match(html, /Landed · awaiting gate/);
+  assert.match(html, /background:var\(--airport-itinerary-status-landed\)/);
+  assert.equal(card.getFinishedAt(trip, [], now), null);
+  html = card.renderLeg(trip, leg, 0, [{ ...live, position_updated_at: landing }], now);
+  assert.doesNotMatch(html, /Taxiing to gate/);
+  for (const invalid of ['false', 'true', false, 1]) {
+    html = card.renderLeg(trip, leg, 0, [{ ...live, gate_arrived_sent: invalid }], now);
+    assert.doesNotMatch(html, /Final arrival · at gate/);
+  }
+  const manual = { ...leg, completed: true, evidence: { ...leg.evidence, manual_completion: new Date(now).toISOString() } };
+  html = card.renderLeg(trip, manual, 0, [live], now);
+  assert.match(html, /Completed manually/);
+  assert.doesNotMatch(html, /Taxiing to gate|Landed · awaiting gate/);
+  leg.evidence.gate_arrival = new Date(now).toISOString();
+  html = card.renderLeg(trip, leg, 0, [], now);
+  assert.match(html, /Final arrival · at gate/);
+  assert.match(html, /background:var\(--airport-itinerary-status-arrived\)/);
+  assert.equal(card.getFinishedAt(trip, [], now), now + 300000);
+  html = card.renderLeg(trip, leg, 0, [], now + 299999);
+  assert.doesNotMatch(html, /background:var\(--airport-itinerary-finished-color/);
+  html = card.renderLeg(trip, leg, 0, [], now + 300000);
+  assert.match(html, /background:var\(--airport-itinerary-finished-color/);
+  assert.doesNotMatch(html, /class="leg-body" hidden/);
+  html = card.renderLeg(trip, leg, 0, [], now + 360000);
+  assert.match(html, /class="leg-body" hidden/);
 });

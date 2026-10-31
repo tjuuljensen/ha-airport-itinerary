@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -108,9 +108,19 @@ class FlightItinerariesSensor(SensorEntity):
         connected = self._entry.options.get(CONF_FR24_CONNECTION, True)
         source_state = self.hass.states.get(source_entity) if connected and source_entity else None
         tracked_legs = self._match_tracked_legs(itineraries, source_state)
-        source_health = _tracking_source_health(source_entity, source_state, tracked_legs) if connected else "disabled"
         runtime = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         lifecycle = runtime["tracker"].view if runtime.get("tracker") else {}
+        now = datetime.now(timezone.utc).timestamp()
+        for itinerary in itineraries:
+            for leg in itinerary.get("legs", []):
+                live = next((row for row in tracked_legs if row["itinerary_id"] == itinerary["id"] and row["leg_id"] == leg["id"]), {})
+                speed = live.get("ground_speed")
+                if (leg.get("arrival_phase") == "landed" and live.get("is_live") and live.get("on_ground") is True
+                        and isinstance(speed, (int, float)) and not isinstance(speed, bool) and speed > 0
+                        and source_state and 0 <= now - source_state.last_updated.timestamp() <= 300
+                        and lifecycle.get("fetching")):
+                    leg["arrival_phase"] = "taxiing"
+        source_health = _tracking_source_health(source_entity, source_state, tracked_legs) if connected else "disabled"
         self._attr_extra_state_attributes = {
             "itineraries": itineraries,
             "journeys": lifecycle.get("journeys", []),
@@ -188,6 +198,8 @@ class FlightItinerariesSensor(SensorEntity):
                     "ground_speed",
                     "heading",
                     "on_ground",
+                    "has_landed",
+                    "gate_arrived_sent",
                     "time_real_departure",
                     "time_estimated_departure",
                     "time_real_arrival",

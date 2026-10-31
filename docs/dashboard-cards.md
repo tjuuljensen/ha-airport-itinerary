@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.9 bundles card version 1.6.9. Follow the
+AaFI 0.3.10 bundles card version 1.6.10. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.9
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.10
       type: module
 ```
 
@@ -287,6 +287,20 @@ Explicit card settings apply in both modes:
 **finish_delay_seconds** defaults to 300. Supported **status_colors** keys are
 scheduled, in_transit, airborne, landed, arrived, connection, and completed.
 These options do not tint unrelated text or action icons.
+
+Landing shows **Landed · awaiting gate**, or **Taxiing to gate** when fresh ground
+movement is available; both use `status_colors.landed`. These colours survive
+loss of the FR24 record. Landing does not start the finish or auto-collapse timer.
+Gate confirmation shows **Final arrival · at gate** with `status_colors.arrived`.
+That colour remains for the finish delay, including during automatic itinerary
+selection, before the configured finished colour and collapse settings apply.
+Explicit status/progress colours still persist after that delay unless a finished
+colour overrides them. Manual completion and removal remain available actions.
+
+The reusable badge adapter separately keeps final arrival visible for its
+configured `after` window from gate confirmation, falling back to touchdown when
+no gate evidence is available. Its reconcile/priority rules can dismiss the badge
+without deleting arrival evidence or stored trips.
 
 ## Actions
 

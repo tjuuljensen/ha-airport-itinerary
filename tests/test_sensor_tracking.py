@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 from custom_components.airport_aware_itinerary.sensor import (
     FlightItinerariesSensor,
@@ -76,9 +79,29 @@ def test_scheduled_record_is_matched_but_not_marked_live():
 
 def test_numeric_on_ground_is_normalized_for_dashboard():
     live = {"flight_number": "SK935", "tracked_type": "live", "on_ground": 0,
+            "has_landed": True, "gate_arrived_sent": False,
             "time_scheduled_departure": "2026-10-23T10:00:00+00:00"}
     matches = FlightItinerariesSensor._match_tracked_legs([{"id": "trip", "legs": [_leg()]}], _source([live]))
     assert matches[0]["on_ground"] is False
+    assert matches[0]["has_landed"] is True
+    assert matches[0]["gate_arrived_sent"] is False
+
+
+@pytest.mark.parametrize(("age", "fetching", "expected"), [(0, True, "taxiing"), (301, True, "landed"), (0, False, "landed")])
+def test_arrival_phase_only_reports_taxiing_with_current_movement(hass, freezer, age, fetching, expected):
+    freezer.move_to("2026-10-23T12:00:00+00:00")
+    live = {"flight_number": "SK935", "tracked_type": "live", "on_ground": True,
+            "ground_speed": 12, "time_scheduled_departure": "2026-10-23T10:00:00+00:00"}
+    hass.states.async_set("sensor.fr24", "1", {"flights": [live]})
+    freezer.tick(age)
+    leg = {**_leg(), "arrival_phase": "landed", "evidence": {"touchdown": "2026-10-23T11:55:00+00:00"}}
+    entry = SimpleNamespace(entry_id="test", options={"tracked_flights_entity": "sensor.fr24"}, data={})
+    manager = Mock(snapshot=lambda: [{"id": "trip", "legs": [leg]}])
+    hass.data["airport_aware_itinerary"] = {"test": {"tracker": SimpleNamespace(view={"fetching": fetching})}}
+    sensor = FlightItinerariesSensor(entry, manager)
+    sensor.hass = hass
+    sensor._refresh_attributes()
+    assert sensor.extra_state_attributes["itineraries"][0]["legs"][0]["arrival_phase"] == expected
 
 
 def test_unavailable_or_unsupported_sources_do_not_match():
