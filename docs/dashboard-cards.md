@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.8 bundles card version 1.6.8. Follow the
+AaFI 0.3.9 bundles card version 1.6.9. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.8
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.9
       type: module
 ```
 
@@ -225,8 +225,10 @@ does not distort the elapsed time. A leg without an expected arrival displays
 
 Upcoming flights stay neutral until their scheduled window ends. After confirmed
 arrival (or scheduled arrival when no live match exists), the progress bar uses
-the progress color during the finish delay, then the times and bar use the finished
-colour unless explicit status/progress colours take precedence. The delay defaults to 300 seconds and its completion timestamp is persisted
+the progress color during the finish delay, then the departure time and bar use
+the finished colour unless explicit status/progress colours take precedence.
+The arrival time follows these colours only after confirmed landing or arrival.
+The delay defaults to 300 seconds and its completion timestamp is persisted
 by the integration for confirmed arrivals. Schedule-only progress is grey,
 while a flight with FR24 data uses the live progress color. Schedule-only legs
 without an active airborne signal change to “Finished (scheduled)” after the
@@ -259,21 +261,28 @@ Colourisation is limited to the **departure time, arrival time, status badge and
 progress bar/marker**. Headings, airport names, descriptive labels, flight details
 and action icons keep their normal styling, including after a flight finishes.
 
-With matched FR24 data, the two times and progress use the current status colour
-by default; the badge uses that same status colour. Without FR24 data, the bar is
-muted and only elapsed departure/arrival times use the theme primary colour.
-Upcoming times retain the normal text colour. Schedule-only timing never proves
-actual departure or arrival.
+With matched FR24 data, departure and progress use the current status colour by
+default; the badge uses that same status colour. **Arrival keeps its normal text
+colour until landing or arrival is confirmed**, even when an estimate is overdue
+or custom colours are configured. Being on the ground before takeoff, manual or
+inferred completion, and a passed scheduled arrival do not qualify. Confirmed
+arrival evidence retained after FR24 cleanup still qualifies.
+
+Without FR24 data, the bar is muted and an elapsed departure uses the theme
+primary colour. Future departures and unconfirmed arrivals retain normal text
+colour. Schedule-only timing never proves actual departure or arrival.
 
 Explicit card settings apply in both modes:
 
-- **status_colors** colours the status badge, both times and bar for that status.
-- **progress_color** overrides the bar and both times, while the badge retains its
-  status colour. It remains effective after finishing unless a finished override
-  is configured.
-- **finished_color**, when configured, overrides those four elements after the
-  finish delay. Without it, explicit status/progress colours remain in effect;
-  otherwise finished times and progress use the muted default.
+- **status_colors** colours the status badge, departure and bar for that status,
+  and arrival once landing or arrival is confirmed.
+- **progress_color** overrides the bar, departure and confirmed arrival, while the
+  badge retains its status colour. It remains effective after finishing unless a
+  finished override is configured.
+- **finished_color**, when configured, overrides the badge, departure, progress
+  and confirmed arrival after the finish delay. Without it, explicit status/progress
+  colours remain in effect; otherwise eligible finished times and progress use the
+  muted default. An unconfirmed arrival remains normal text in either case.
 
 **finish_delay_seconds** defaults to 300. Supported **status_colors** keys are
 scheduled, in_transit, airborne, landed, arrived, connection, and completed.

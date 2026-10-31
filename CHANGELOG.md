@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.9 - 2026-10-31
+
+Includes dashboard card version 1.6.9.
+
+- Keep scheduled and estimated arrival times in normal text colour until landing
+  or arrival is confirmed. Custom status, progress and finished colours respect
+  the same rule. An overdue schedule, pre-departure ground position or manual
+  completion does not colour arrival; retained arrival evidence survives cleanup.
+
 ## 0.3.8 - 2026-10-31
 
 First consolidated AaFI release, including dashboard card version 1.6.8.

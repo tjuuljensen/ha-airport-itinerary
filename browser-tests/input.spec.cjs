@@ -400,7 +400,8 @@ test('only four flight elements are coloured and explicit colours work without F
     schedule.setConfig({});document.body.append(schedule);schedule.hass=hass;
   });
   const departure=page.locator('.endpoint-time').first(),arrival=page.locator('.endpoint-time').last(),badge=page.locator('.badge'),bar=page.locator('.progress-fill');
-  for(const target of [departure,arrival,badge]) await expect(target).toHaveCSS('color','rgb(0, 188, 212)');
+  for(const target of [departure,badge]) await expect(target).toHaveCSS('color','rgb(0, 188, 212)');
+  await expect(arrival).toHaveCSS('color','rgb(255, 255, 255)');
   await expect(bar).toHaveCSS('background-color','rgb(0, 188, 212)');
   const plainSelector='.flight-heading h3,.flight-label,.endpoint-code,.endpoint-label,.airport-date,.route-arrow,.schedule-note,.flight-details summary,.flight-details strong,.leg-collapse,.remove-flight';
   const plain=await page.locator(plainSelector).evaluateAll(elements=>elements.map(el=>getComputedStyle(el).color));
@@ -410,21 +411,81 @@ test('only four flight elements are coloured and explicit colours work without F
   await expect(arrival).toHaveCSS('color','rgb(255, 255, 255)');
   await expect(bar).toHaveCSS('background-color','rgb(136, 136, 136)');
   await page.evaluate(() => schedule.setConfig({status_colors:{scheduled:'#00ff00'}}));
-  for(const target of [departure,arrival,badge]) await expect(target).toHaveCSS('color','rgb(0, 255, 0)');
+  for(const target of [departure,badge]) await expect(target).toHaveCSS('color','rgb(0, 255, 0)');
+  await expect(arrival).toHaveCSS('color','rgb(255, 255, 255)');
   await expect(bar).toHaveCSS('background-color','rgb(0, 255, 0)');
   await page.evaluate(() => schedule.setConfig({status_colors:{scheduled:'#00ff00'},progress_color:'#ff00ff'}));
   await expect(badge).toHaveCSS('color','rgb(0, 255, 0)');
-  for(const target of [departure,arrival]) await expect(target).toHaveCSS('color','rgb(255, 0, 255)');
+  await expect(departure).toHaveCSS('color','rgb(255, 0, 255)');
+  await expect(arrival).toHaveCSS('color','rgb(255, 255, 255)');
   await expect(bar).toHaveCSS('background-color','rgb(255, 0, 255)');
   await page.evaluate(() => {hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0].arrival.utc_timestamp=new Date(Date.now()-600000).toISOString();schedule.hass={...hass};});
   await expect(badge).toHaveText('Finished (scheduled)');
   await expect(bar).toHaveCSS('background-color','rgb(255, 0, 255)');
   await expect(departure).toHaveCSS('color','rgb(255, 0, 255)');
   await page.evaluate(() => schedule.setConfig({status_colors:{scheduled:'#00ff00'},progress_color:'#ff00ff',finished_color:'#aabbcc'}));
-  for(const target of [departure,arrival,badge]) await expect(target).toHaveCSS('color','rgb(170, 187, 204)');
+  for(const target of [departure,badge]) await expect(target).toHaveCSS('color','rgb(170, 187, 204)');
+  await expect(arrival).toHaveCSS('color','rgb(255, 255, 255)');
   await expect(bar).toHaveCSS('background-color','rgb(170, 187, 204)');
   // Detail fields can disappear with live data; compare the persistent visual elements.
   const remaining=await page.locator(plainSelector).evaluateAll(elements=>elements.map(el=>getComputedStyle(el).color));
   expect(remaining.every(color=>color==='rgb(255, 255, 255)' || color==='rgb(221, 221, 221)' || color==='rgb(198, 40, 40)')).toBeTruthy();
   expect(remaining.slice(0,8)).toEqual(plain.slice(0,8));
+});
+
+test('arrival colour requires landing evidence and survives tracked-record cleanup', async ({ page }) => {
+  await mount(page);
+  await page.evaluate(() => {
+    card.remove();
+    const now = Date.now(), attrs = hass.states['sensor.flight_itineraries'].attributes;
+    attrs.itineraries[0].legs = [{ id: 'leg', flight_number: 'MS760',
+      departure: { utc_timestamp: new Date(now - 3600000).toISOString(), timezone: 'UTC' },
+      arrival: { utc_timestamp: new Date(now + 3600000).toISOString(), timezone: 'UTC' } }];
+    attrs.tracked_legs = [{ itinerary_id: 'trip', leg_id: 'leg', is_live: true,
+      on_ground: true, position_updated_at: new Date(now).toISOString(),
+      time_estimated_arrival: (now + 1800000) / 1000 }];
+    window.schedule = document.createElement('airport-itinerary-schedule');
+    schedule.style.setProperty('--success-color', '#00ff00');
+    schedule.setConfig({ progress_color: '#ff00ff' });
+    document.body.append(schedule); schedule.hass = hass;
+  });
+  const arrival = page.locator('.endpoint-time').last();
+  await expect(page.locator('.badge')).toHaveText('On ground');
+  await expect(page.locator('.endpoint-label').last()).toHaveText('Estimated arrival');
+  await expect(arrival).toHaveCSS('color', 'rgb(255, 255, 255)');
+  await page.evaluate(() => {
+    const row = hass.states['sensor.flight_itineraries'].attributes.tracked_legs[0];
+    row.on_ground = false;
+    row.time_estimated_arrival = (Date.now() - 600000) / 1000;
+    schedule.hass = { ...hass };
+  });
+  await expect(page.locator('.badge')).toHaveText('Airborne');
+  await expect(arrival).toHaveCSS('color', 'rgb(255, 255, 255)');
+  for (const evidence of ['time_real_landing', 'time_real_arrival', 'time_gate_arrival', 'landing', 'gate_arrival']) {
+    await page.evaluate(field => {
+      const attrs = hass.states['sensor.flight_itineraries'].attributes;
+      attrs.tracked_legs = [{ itinerary_id: 'trip', leg_id: 'leg', is_live: true,
+        on_ground: true, position_updated_at: new Date().toISOString(), [field]: Date.now() / 1000 }];
+      schedule.hass = { ...hass };
+    }, evidence);
+    await expect(arrival).toHaveCSS('color', 'rgb(255, 0, 255)');
+  }
+  await page.evaluate(() => schedule.setConfig({}));
+  await expect(arrival).toHaveCSS('color', 'rgb(0, 255, 0)');
+  await page.evaluate(() => {
+    const attrs = hass.states['sensor.flight_itineraries'].attributes;
+    attrs.itineraries[0].legs[0].finished_at = new Date(Date.now() - 600000).toISOString();
+    attrs.tracked_legs = [];
+    schedule.setConfig({ finished_color: '#aabbcc' }); schedule.hass = { ...hass };
+  });
+  await expect(arrival).toHaveCSS('color', 'rgb(170, 187, 204)');
+  await page.evaluate(() => {
+    const leg = hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0];
+    delete leg.finished_at;
+    leg.completed = true;
+    leg.evidence = { manual_completion: new Date().toISOString() };
+    schedule.setConfig({ status_colors: { completed: '#00ff00' }, progress_color: '#ff00ff' });
+    schedule.hass = { ...hass };
+  });
+  await expect(arrival).toHaveCSS('color', 'rgb(255, 255, 255)');
 });

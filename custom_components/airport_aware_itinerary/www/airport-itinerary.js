@@ -1,6 +1,6 @@
 const DOMAIN = "airport_aware_itinerary";
 const DEFAULT_ENTITY = "sensor.flight_itineraries";
-const CARD_VERSION = "1.6.8";
+const CARD_VERSION = "1.6.9";
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (char) =>
@@ -1123,8 +1123,10 @@ class AirportItinerarySchedule extends AirportItineraryBase {
     const colourTimes = useFinishedOverride || hasProgressColor || hasStatusColor || tracked || isCompleted || isFinished;
     const departureTimeColor = colourTimes ? progressColor
       : displayDeparture != null && now >= displayDeparture ? "var(--primary-color)" : "var(--primary-text-color)";
-    const arrivalTimeColor = colourTimes ? progressColor
-      : displayArrival != null && now >= displayArrival ? "var(--primary-color)" : "var(--primary-text-color)";
+    // An estimate, elapsed schedule or manual completion does not prove landing.
+    // finished_at retains confirmed arrival evidence after the FR24 record is removed.
+    const arrivalConfirmed = hasArrived || isLanded || (actualFinishedAt != null && now >= actualFinishedAt);
+    const arrivalTimeColor = arrivalConfirmed ? progressColor : "var(--primary-text-color)";
     const originZone = dep.timezone || "";
 
     const flightLabel = leg.label || `${origin}-${destination}`;
