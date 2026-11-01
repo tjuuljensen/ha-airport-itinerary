@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.15 - 2026-11-01
+
+Includes dashboard card version 1.6.14.
+
+- Use saved actual departure-to-landing/gate timing in Itinerary details after
+  arrival, alongside scheduled duration and confirmed arrival status. Do not
+  keep a running counter or claim actual times require ongoing live tracking.
+- Cover next-day arrival display, actual endpoint times, colours and notices
+  with fetching off, no provider records, and a disconnected source.
+
 ## 0.3.14 - 2026-11-01
 
 Includes dashboard card version 1.6.13.

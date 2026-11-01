@@ -57,9 +57,30 @@ const loadCard = () => {
     navigator: { language: "en" },
   };
   const source = fs.readFileSync(path.join(__dirname, "custom_components/airport_aware_itinerary/www/airport-itinerary.js"), "utf8");
-  vm.runInNewContext(`${source}\nglobalThis.__testApi = { routeProgress, AirportItinerarySchedule, sortItineraries, waitingForFlightDetails, preferredItinerary, isFreshUpdate };`, context);
+  vm.runInNewContext(`${source}\nglobalThis.__testApi = { routeProgress, AirportItinerarySchedule, sortItineraries, waitingForFlightDetails, preferredItinerary, isFreshUpdate, retainedJourneyTiming };`, context);
   return { ...context, definitions, api: context.__testApi };
 };
+
+test("journey summary retains actual duration without live data and never invents missing times", () => {
+  const { api } = loadCard();
+  const now = Date.parse('2026-11-01T08:00:00Z');
+  const first = { id: 'first', departure: { utc_timestamp: '2026-10-31T14:05:00Z' },
+    evidence: { departure: '2026-10-31T14:27:00Z' } };
+  const last = { id: 'last', evidence: { touchdown: '2026-10-31T18:48:57Z', gate_arrival: '2026-10-31T19:04:58Z' } };
+  const trip = { id: 'trip', legs: [first, last] };
+  assert.equal(api.retainedJourneyTiming(trip, [], now).elapsed, '4h 37m');
+  assert.equal(api.retainedJourneyTiming(trip, [], now + 86400000).elapsed, '4h 37m');
+  delete last.evidence.gate_arrival;
+  assert.equal(api.retainedJourneyTiming(trip, [], now).elapsed, '4h 21m');
+  assert.equal(api.retainedJourneyTiming(trip, [], now).status, 'Landed · awaiting gate');
+  delete first.evidence.departure;
+  assert.equal(api.retainedJourneyTiming(trip, [], now).elapsed, 'Unavailable');
+  last.evidence = { manual_completion: '2026-10-31T19:00:00Z' };
+  assert.equal(api.retainedJourneyTiming(trip, [], now).elapsed, 'Unavailable');
+  last.evidence = {};
+  first.evidence = { gate_arrival: '2026-10-31T16:00:00Z' };
+  assert.equal(api.retainedJourneyTiming(trip, [], now), null); // An intermediate arrival is not final.
+});
 
 test("route progress follows and clamps to the great-circle route", () => {
   const { api } = loadCard();

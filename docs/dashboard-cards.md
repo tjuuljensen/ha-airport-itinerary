@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.13 bundles card version 1.6.13. Follow the
+AaFI 0.3.15 bundles card version 1.6.14. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.13
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.14
       type: module
 ```
 
@@ -192,12 +192,20 @@ auto_collapse_after_minutes: 10
 ~~~
 
 
-Total journey time, elapsed time, and remaining time are in the folded
-**Itinerary details** section. They are calculated from the scheduled first
+Journey timing is in the folded
+**Itinerary details** section. Before final landing, the explicitly scheduled
+metrics are calculated from the scheduled first
 departure and final expected arrival. These values do not require FR24, but a
 final expected arrival must be entered to calculate the complete journey
 duration and remaining time. Without one, elapsed time can still be shown after
 departure and remaining time is labelled as pending.
+
+After the final leg lands, the summary uses the recorded first departure and
+final landing, then final gate arrival. It shows the fixed actual duration beside
+the scheduled duration and arrival status. Missing actual timestamps show
+**Unavailable**. Saved arrival status, actual times and colours remain after
+fetching stops, provider cleanup or a restart, until the itinerary is removed.
+Reload open dashboards after a card update to load the new version.
 
 Each leg's folded **Flight details** section shows the current time at its
 origin and destination airports. When the optional FR24 source provides a

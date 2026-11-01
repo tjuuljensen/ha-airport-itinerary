@@ -404,7 +404,7 @@ test('retained arrival replaces the waiting notice and stays selected after FR24
   });
   await expect(page.locator('.badge')).toHaveText('Landed · awaiting gate');
   await expect(page.locator('.tracking-notice')).toHaveCount(0);
-  await expect(page.getByText('Departure to landing', { exact: true }).locator('..').locator('strong')).toHaveText('4h 21m');
+  await expect(page.locator('.flight-details').getByText('Departure to landing', { exact: true }).locator('..').locator('strong')).toHaveText('4h 21m');
 });
 
 
@@ -632,3 +632,49 @@ for (const width of [320, 390, 490]) {
     await expect(page.locator('.leg-body')).toBeHidden();
   });
 }
+
+
+test('yesterday arrival keeps actual times and colours with fetching off', async ({ page }, testInfo) => {
+  await page.clock.install({ time: new Date('2026-11-01T08:00:00Z') });
+  await mount(page, 390);
+  await page.evaluate(() => {
+    card.remove();
+    const attrs = hass.states['sensor.flight_itineraries'].attributes;
+    attrs.itineraries = [{ id: 'trip', name: 'Copenhagen - Cairo', legs: [{ id: 'leg', flight_number: 'MS760',
+      origin_airport: 'CPH', destination_airport: 'CAI',
+      departure: { utc_timestamp: '2026-10-31T14:05:00Z', timezone: 'Europe/Copenhagen' },
+      arrival: { utc_timestamp: '2026-10-31T18:30:00Z', timezone: 'Africa/Cairo' },
+      evidence: { departure: '2026-10-31T14:27:00Z', touchdown: '2026-10-31T18:48:57Z', gate_arrival: '2026-10-31T19:04:58Z' },
+      finished_at: '2026-10-31T19:04:58Z', arrival_phase: 'at_gate', final_arrival_at: '2026-10-31T19:04:58Z' }] }];
+    attrs.tracked_legs = [];
+    attrs.tracking_source_health = 'no_flights';
+    attrs.tracking = { fetching: false, tracking_required: false, fetching_reason: 'off' };
+    window.schedule = document.createElement('airport-itinerary-schedule');
+    schedule.style.setProperty('--success-color', '#4caf50');
+    schedule.setConfig({}); document.body.append(schedule); schedule.hass = hass;
+  });
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
+  await expect(page.locator('.endpoint-time').first()).toHaveText('15:27');
+  await expect(page.locator('.endpoint-time').last()).toHaveText('21:04');
+  await expect(page.locator('.schedule-note')).toHaveText('Gate arrival confirmed by FR24.');
+  await page.locator('.itinerary-details > summary').click();
+  await expect(page.locator('.trip-metric strong')).toHaveText(['4h 37m', '4h 25m', 'Final arrival · at gate']);
+  await expect(page.locator('.trip-summary-note')).toContainText('retained from tracking');
+  const colour = await page.locator('.badge').evaluate(el => getComputedStyle(el).color);
+  await expect(page.locator('.endpoint-time').first()).toHaveCSS('color', colour);
+  await expect(page.locator('.endpoint-time').last()).toHaveCSS('color', colour);
+  await expect(page.locator('.progress-fill')).toHaveCSS('background-color', colour);
+  await page.screenshot({ path: testInfo.outputPath('yesterday-arrival.png') });
+  await page.evaluate(() => schedule.shadowRoot.activeElement?.blur());
+  await page.clock.fastForward(86400000);
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
+  await expect(page.locator('.trip-metric strong')).toHaveText(['4h 37m', '4h 25m', 'Final arrival · at gate']);
+  await page.evaluate(() => {
+    hass.states['sensor.flight_itineraries'].attributes.tracking_source_health = 'disabled';
+    hass.states['sensor.flight_itineraries'].attributes.tracking.connection_enabled = false;
+    schedule.hass = { ...hass };
+  });
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
+});

@@ -1,6 +1,6 @@
 const DOMAIN = "airport_aware_itinerary";
 const DEFAULT_ENTITY = "sensor.flight_itineraries";
-const CARD_VERSION = "1.6.13";
+const CARD_VERSION = "1.6.14";
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (char) =>
@@ -47,6 +47,26 @@ const duration = (seconds) => {
   if (days) return `${days}d ${hours}h ${remainder}m`;
   if (hours) return `${hours}h ${remainder}m`;
   return `${remainder}m`;
+};
+
+const retainedJourneyTiming = (trip, tracked, now) => {
+  const legs = trip?.legs || [];
+  if (!legs.length) return null;
+  const first = legs[0], last = legs.at(-1);
+  const match = (leg) => tracked.find((row) => row.itinerary_id === trip.id && row.leg_id === leg.id);
+  const arrival = arrivalState(last, match(last), now);
+  if (!arrival.arrived && !arrival.landed && !last.completed && arrival.completedAt == null) return null;
+  const start = stamp(first.evidence?.departure) ?? stamp(match(first)?.time_real_departure);
+  const end = arrival.arrived ? arrival.gateAt : arrival.landedAt;
+  const elapsed = start != null && end != null && end >= start ? duration((end - start) / 1000) : "Unavailable";
+  return {
+    label: arrival.arrived ? "Actual travel time" : arrival.landed ? "Departure to landing" : "Actual travel time",
+    elapsed,
+    status: arrival.arrived ? "Final arrival · at gate" : arrival.landed ? "Landed · awaiting gate" : "Completed",
+    note: arrival.arrived ? "Actual time from first departure to final gate arrival, retained from tracking."
+      : arrival.landed ? "Actual time from first departure to landing; final gate arrival is not yet confirmed."
+        : "Journey marked completed; actual duration requires recorded departure and arrival times.",
+  };
 };
 
 const localTime = (date, timezone, options = {}, locale) => {
@@ -841,14 +861,15 @@ class AirportItinerarySchedule extends AirportItineraryBase {
       ? null
       : totalSeconds == null ? rawElapsedSeconds : Math.min(rawElapsedSeconds, totalSeconds);
     const remainingSeconds = arrivalMs ? Math.max(0, (arrivalMs - now) / 1000) : null;
+    const retainedTiming = retainedJourneyTiming(trip, tracked, now);
     const journey = trip ? `<details class="itinerary-details">
       <summary>Itinerary details</summary>
       <div class="trip-summary">
-        <div class="trip-metric"><span class="muted">Total travel time</span><strong>${totalSeconds == null ? "Awaiting final arrival" : duration(totalSeconds)}</strong></div>
-        <div class="trip-metric"><span class="muted">Time elapsed</span><strong>${elapsedSeconds == null ? "Not started" : duration(elapsedSeconds)}</strong></div>
-        <div class="trip-metric"><span class="muted">Time remaining</span><strong>${remainingSeconds == null ? "Awaiting final arrival" : remainingSeconds === 0 ? "Scheduled arrival passed" : duration(remainingSeconds)}</strong></div>
+        <div class="trip-metric"><span class="muted">${retainedTiming?.label || "Scheduled travel time"}</span><strong>${retainedTiming?.elapsed ?? (totalSeconds == null ? "Awaiting final arrival" : duration(totalSeconds))}</strong></div>
+        <div class="trip-metric"><span class="muted">${retainedTiming ? "Scheduled travel time" : "Scheduled time elapsed"}</span><strong>${retainedTiming ? (totalSeconds == null ? "Arrival not entered" : duration(totalSeconds)) : elapsedSeconds == null ? "Not started" : duration(elapsedSeconds)}</strong></div>
+        <div class="trip-metric"><span class="muted">${retainedTiming ? "Arrival status" : "Scheduled time remaining"}</span><strong>${retainedTiming?.status ?? (remainingSeconds == null ? "Awaiting final arrival" : remainingSeconds === 0 ? "Scheduled arrival passed" : duration(remainingSeconds))}</strong></div>
       </div>
-      <div class="muted trip-summary-note">Trip timing is calculated from the entered schedule; actual departure and arrival require live tracking.</div>
+      <div class="muted trip-summary-note">${retainedTiming?.note || "These summary durations use the entered schedule. Recorded actual times are retained in the flight details."}</div>
     </details>` : "";
     const trackingHealth = state?.attributes?.tracking_source_health;
     const trackingMessages = {
