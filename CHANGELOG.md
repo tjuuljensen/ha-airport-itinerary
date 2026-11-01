@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.14 - 2026-11-01
+
+Includes dashboard card version 1.6.13.
+
+- Persist automatic fetching ownership and manual keep-on overrides across
+  restarts, bound to the configured switch and flight sensor. Reconcile overdue
+  sessions on startup while preserving manual pauses and unrelated flights.
+- Allow an unchanged empty available sensor to complete idle shutdown; keep
+  freshness checks for flight evidence and cleanup operations.
+- Expose tracking.fetching_reason and tracking.manual_keep_on diagnostics.
+  Legacy sessions without recorded ownership remain external.
+
+## 0.3.13 - 2026-10-31
+
+Includes dashboard card version 1.6.13.
+
+- Replace the running elapsed counter after landing with a fixed **Departure to
+  landing** duration, then **Departure to gate** once gate arrival is confirmed.
+  Use actual timestamps and retained evidence; show **Unavailable** when actual
+  timing is missing instead of substituting the schedule or current clock.
+- Before arrival, label the running counter **Time since departure**, or **Time
+  since scheduled departure** when an actual departure has not been observed.
+
+## 0.3.12 - 2026-10-31
+
+Includes dashboard card version 1.6.12.
+
+- After gate arrival, keep Departed, Final arrival and the progress bar in the
+  same colour as the status badge, including after the finish delay and FR24
+  cleanup. A configured finished colour applies consistently to all four;
+  a separate progress colour no longer overrides confirmed gate arrival.
+
+## 0.3.11 - 2026-10-31
+
+Includes dashboard card version 1.6.11.
+
+- Suppress FR24 waiting messages when every displayed leg already has retained
+  landing, gate arrival or completion evidence, including after provider cleanup.
+- Keep a confirmed arrived itinerary selected until its journey API/reconcile
+  deadline (or a longer configured finish delay), instead of moving to an upcoming
+  trip after the default five-minute colour delay. Read retained gate evidence
+  from older sensor payloads as well as the new journey attributes.
+
 ## 0.3.10 - 2026-10-31
 
 Includes dashboard card version 1.6.10.

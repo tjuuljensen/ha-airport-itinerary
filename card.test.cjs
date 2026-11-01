@@ -258,6 +258,30 @@ test("selection uses a later journey in the same trip and supports schedule-only
   assert.equal(api.preferredItinerary(trips, [], now).id, 'later');
 });
 
+test("saved gate arrival retains selection until the journey stop, including older sensor data", () => {
+  const { api } = loadCard();
+  const now = Date.parse('2026-10-31T19:18:00Z');
+  const leg = { id: 'landed', departure: { utc_timestamp: '2026-10-31T14:05:00Z' },
+    evidence: { touchdown: '2026-10-31T18:48:57Z', gate_arrival: '2026-10-31T19:04:58Z' } };
+  const trips = [{ id: 'next', legs: [] }, { id: 'arrived', legs: [leg] }];
+  const stop = '2026-10-31T20:48:57Z';
+  const journeys = [{ itinerary_id: 'arrived', leg_ids: ['landed'], completed: true, status: 'completed',
+    departure_at: leg.departure.utc_timestamp, api_stop_at: stop, expires_at: '2026-11-01T23:00:00Z' },
+    { itinerary_id: 'next', departure_at: '2026-11-11T08:50:00Z' }];
+  assert.equal(api.preferredItinerary(trips, journeys, now).id, 'arrived');
+  assert.equal(api.preferredItinerary(trips, journeys, Date.parse(stop) - 1).id, 'arrived');
+  assert.equal(api.preferredItinerary(trips, journeys, Date.parse(stop)).id, 'next');
+  journeys[0].final_arrival_at = leg.evidence.gate_arrival;
+  assert.equal(api.preferredItinerary(trips, journeys, now).id, 'arrived');
+  journeys[0].api_stop_at = null;
+  assert.equal(api.preferredItinerary(trips, journeys, now).id, 'next');
+  // A manual completion is not an arrival to retain for an API grace period.
+  journeys[0].api_stop_at = stop;
+  delete journeys[0].final_arrival_at;
+  leg.evidence = { manual_completion: '2026-10-31T19:04:58Z' };
+  assert.equal(api.preferredItinerary(trips, journeys, now).id, 'next');
+});
+
 
 test("live ground status is distinct from scheduled, airborne and completed", () => {
   const { api } = loadCard();
@@ -297,6 +321,37 @@ test("freshness tolerates bounded server clock skew without extending stale data
   const tracked=[{itinerary_id:'trip',leg_id:'leg',is_live:true,on_ground:false,time_real_departure:now/1000-3600,position_updated_at:new Date(now+750).toISOString()}];
   assert.ok(card.renderLeg(trip,leg,0,tracked,now).includes(">Airborne</span>"));
   assert.equal(card.getFinishedAt(trip,tracked,now),null);
+});
+
+test("elapsed flight detail stops at landing and uses actual departure-to-gate duration", () => {
+  const { api } = loadCard();
+  const card = Object.create(api.AirportItinerarySchedule.prototype);
+  card._config = {}; card._legCollapseOverrides = new Map(); card._hass = { locale: { language: 'en-GB' } };
+  const now = Date.parse('2026-10-31T20:27:00Z');
+  const leg = { id: 'leg', flight_number: 'MS760', origin_airport: 'CPH', destination_airport: 'CAI',
+    departure: { utc_timestamp: '2026-10-31T14:05:00Z', timezone: 'Europe/Copenhagen' },
+    arrival: { utc_timestamp: '2026-10-31T18:30:00Z', timezone: 'Africa/Cairo' },
+    evidence: { departure: '2026-10-31T14:27:00Z', touchdown: '2026-10-31T18:48:57Z' } };
+  const trip = { id: 'trip', legs: [leg] };
+  const render = (row, time = now, tracked = []) => card.renderLeg(trip, row, 0, tracked, time);
+  for (const time of [now, now + 3600000, now + 86400000]) {
+    let html = render(leg, time);
+    assert.match(html, /Departure to landing<\/span><strong>4h 21m<\/strong>/);
+    assert.doesNotMatch(html, /Time since|Scheduled time elapsed/);
+    html = render({ ...leg, evidence: { ...leg.evidence, gate_arrival: '2026-10-31T19:04:58Z' } }, time);
+    assert.match(html, /Departure to gate<\/span><strong>4h 37m<\/strong>/);
+    assert.match(html, /Scheduled flight time<\/span><strong>4h 25m<\/strong>/);
+    assert.doesNotMatch(html, /Time since|Scheduled time elapsed/);
+  }
+  const missingDeparture = { ...leg, evidence: { touchdown: leg.evidence.touchdown } };
+  assert.match(render(missingDeparture), /Departure to landing<\/span><strong>Unavailable/);
+  const flagsOnly = { itinerary_id: 'trip', leg_id: 'leg', is_live: true, has_landed: true,
+    position_updated_at: new Date(now).toISOString() };
+  assert.match(render({ ...leg, evidence: {} }, now, [flagsOnly]), /Departure to landing<\/span><strong>Unavailable/);
+  assert.match(render(leg, now, [{ ...flagsOnly, gate_arrived_sent: true }]), /Departure to gate<\/span><strong>Unavailable/);
+  assert.match(render({ ...leg, completed: true, evidence: { manual_completion: new Date(now).toISOString() } }), /Actual duration<\/span><strong>Unavailable/);
+  assert.match(render({ ...leg, evidence: { departure: leg.evidence.departure } }), /Time since departure<\/span><strong>6h 0m/);
+  assert.match(render({ ...leg, evidence: {} }), /Time since scheduled departure<\/span><strong>6h 22m/);
 });
 
 test("landing stays coloured and expanded until the final gate arrival timer", () => {

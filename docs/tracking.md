@@ -11,7 +11,7 @@ not delete a trip or turn a scheduled arrival into a confirmed arrival.
 | `fr24_auto_track` | Off; existing setting preserved | Submit eligible flight numbers and confirm them through the selected sensor |
 | `fr24_auto_cleanup` | Off | Remove only records this integration added and subsequently observed |
 | `fr24_auto_enable` | Off | Turn fetching on before journeys |
-| `fr24_auto_disable` | Off | Turn off only a continuously owned fetching session |
+| `fr24_auto_disable` | Off | Turn off an automatically owned session, including after restart |
 | `api_before_minutes` | 60; range 0–240 | Lead time before each journey |
 | `api_after_hours` | 2; range 0–48 | Fetching grace after final touchdown, with actual arrival as fallback |
 | `cleanup_after_hours` | 2; range 0–48 | Per-flight retention after touchdown; gate arrival ends retention immediately |
@@ -75,13 +75,33 @@ stop timestamp sensors can be used in native time triggers. A null deadline
 means there is no known deadline, not permission to shut down.
 
 Shutdown waits until no journey requires fetching, no cleanup/request grace is
-pending, the source is responsive, and every additional tracked record is owned.
-Unknown or pre-existing fetching sessions are not shut down. Ownership of a
-switch session is deliberately relinquished on restart/reload or uncertain
-switch state. This can leave fetching on after a restart; use a separate user
-automation if a broader shutdown policy is desired, with integration shutdown
-disabled. Manual switch-off pauses active journeys and is persisted until those
-journeys leave their active windows.
+pending, the source is available, and every additional tracked record is owned.
+An unchanged empty flight list permits idle shutdown even if its last update is
+old. Nonempty lists still require a responsive source; flight evidence and
+removal keep their freshness requirements. Unavailable or malformed sources
+block shutdown.
+
+Fetching ownership is persisted before automatic turn-on and retained through
+restart/reload and temporary switch unavailability. Startup immediately checks
+saved journey deadlines, and source/switch recovery triggers another check.
+Control is bound to the configured switch and flight sensor; changing either or
+disconnecting FR24 relinquishes it. Unknown/pre-existing sessions, including
+sessions from versions before 0.3.14 without saved control, remain external and
+are not adopted. Turn such a session off once to return to automatic scheduling.
+
+Manual switch-off pauses active journeys until their active windows end. Manual
+off-to-on clears those pauses and sets a persisted keep-on override; turn it off
+to clear that override. A saved automatic session found off at startup is treated
+as a pause. Changes made entirely while HA is offline cannot be distinguished
+when the switch returns in the same state; the last saved control applies.
+
+The tracking.fetching_reason attribute explains the current decision:
+active_journey, arrival_grace_period, manual_keep_on, manual_pause,
+external_session, unrelated_tracked_flights, cleanup_pending,
+source_unavailable, source_stale, switch_unavailable,
+automatic_shutdown_disabled, shutdown_pending (service not yet confirmed),
+off, or disconnected. The tracking.manual_keep_on attribute exposes the
+persisted manual override.
 
 ## Sensor data and events
 

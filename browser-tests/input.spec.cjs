@@ -336,6 +336,77 @@ test('schedule defaults to active then upcoming without reordering or overriding
   expect(await page.evaluate(() => schedule._selected)).toBe('next');
 });
 
+test('retained arrival replaces the waiting notice and stays selected after FR24 cleanup', async ({ page }, testInfo) => {
+  await mount(page, 390);
+  await page.evaluate(() => {
+    card.remove();
+    const now = Date.now(), iso = minutes => new Date(now + minutes * 60000).toISOString();
+    const attrs = hass.states['sensor.flight_itineraries'].attributes;
+    attrs.itineraries = [
+      { id: 'next', name: 'Copenhagen - Vienna', legs: [{ id: 'next-leg', flight_number: 'OS992',
+        departure: { utc_timestamp: iso(14400), timezone: 'Europe/Copenhagen' } }] },
+      { id: 'arrived', name: 'Copenhagen - Cairo', legs: [{ id: 'arrived-leg', flight_number: 'MS760', origin_airport: 'CPH', destination_airport: 'CAI',
+        departure: { utc_timestamp: iso(-313), timezone: 'Europe/Copenhagen' },
+        arrival: { utc_timestamp: iso(-48), timezone: 'Africa/Cairo' },
+        finished_at: iso(-14), evidence: { departure: iso(-291), touchdown: iso(-30), gate_arrival: iso(-14) } }] },
+    ];
+    // The deployed 0.3.9 sensor has saved leg evidence but no final_arrival_at.
+    attrs.journeys = [
+      { itinerary_id: 'arrived', leg_ids: ['arrived-leg'], departure_at: iso(-313), arrival_at: iso(-48),
+        touchdown_at: iso(-30), completed: true, status: 'completed', completion_source: 'confirmed',
+        tracking_required: true, api_stop_at: iso(90), expires_at: iso(1440) },
+      { itinerary_id: 'next', leg_ids: ['next-leg'], departure_at: iso(14400), api_start_at: iso(14340), tracking_required: false },
+    ];
+    attrs.tracked_legs = [];
+    attrs.tracking_source_health = 'no_flights';
+    attrs.tracking_source_entity = 'sensor.fr24';
+    attrs.tracking = { fetching: true, auto_track: true, tracking_required: true };
+    hass.states['sensor.fr24'] = { state: '0', attributes: { flights: [] } };
+    window.schedule = document.createElement('airport-itinerary-schedule');
+    schedule.setConfig({ status_colors: { arrived: '#00ff00', landed: '#ff8800' } });
+    document.body.append(schedule); schedule.hass = hass;
+  });
+  const select = page.locator('airport-itinerary-schedule #trip');
+  await expect(select).toHaveValue('arrived');
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
+  await expect(page.locator('.endpoint-label').last()).toHaveText('Final arrival');
+  await expect(page.locator('.endpoint-time').last()).toHaveCSS('color', 'rgb(0, 255, 0)');
+  await page.locator('.flight-details > summary').click();
+  await expect(page.getByText('Departure to gate', { exact: true }).locator('..').locator('strong')).toHaveText('4h 37m');
+  await expect(page.getByText('Scheduled flight time', { exact: true }).locator('..').locator('strong')).toHaveText('4h 25m');
+  await expect(page.getByText('Scheduled time elapsed', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('retained-arrival.png') });
+  // The gate/landing evidence also suppresses a number-only replacement watch.
+  await page.evaluate(() => {
+    schedule.shadowRoot.activeElement?.blur();
+    hass.states['sensor.fr24'].attributes.flights = [{ flight_number: 'MS760', tracked_type: 'schedule' }];
+    hass.states['sensor.flight_itineraries'].attributes.tracking_source_health = 'no_matching_flight';
+    schedule.hass = { ...hass };
+  });
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  // Reconciliation expiry, not the five-minute colour delay, advances selection.
+  await page.evaluate(() => {
+    hass.states['sensor.flight_itineraries'].attributes.journeys[0].api_stop_at = new Date(Date.now() - 1000).toISOString();
+    schedule.hass = { ...hass };
+  });
+  await expect(select).toHaveValue('next');
+  await expect(page.locator('.tracking-notice')).toContainText('Tracking starts');
+  await select.selectOption('arrived');
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
+  // With only touchdown saved, disappearance must still say landed, not scheduled.
+  await page.evaluate(() => {
+    const leg = hass.states['sensor.flight_itineraries'].attributes.itineraries[1].legs[0];
+    delete leg.evidence.gate_arrival;
+    leg.finished_at = leg.evidence.touchdown;
+    schedule.shadowRoot.activeElement?.blur(); schedule.hass = { ...hass }; schedule.render();
+  });
+  await expect(page.locator('.badge')).toHaveText('Landed · awaiting gate');
+  await expect(page.locator('.tracking-notice')).toHaveCount(0);
+  await expect(page.getByText('Departure to landing', { exact: true }).locator('..').locator('strong')).toHaveText('4h 21m');
+});
+
 
 test('live ground flight changes to airborne and arrival from provider evidence', async ({ page }) => {
   await mount(page);
@@ -435,7 +506,7 @@ test('only four flight elements are coloured and explicit colours work without F
   expect(remaining.slice(0,8)).toEqual(plain.slice(0,8));
 });
 
-test('arrival colour requires landing evidence and survives tracked-record cleanup', async ({ page }) => {
+test('arrival colour requires landing evidence and survives tracked-record cleanup', async ({ page }, testInfo) => {
   await mount(page);
   await page.evaluate(() => {
     card.remove();
@@ -470,7 +541,8 @@ test('arrival colour requires landing evidence and survives tracked-record clean
         on_ground: true, position_updated_at: new Date().toISOString(), [field]: Date.now() / 1000 }];
       schedule.hass = { ...hass };
     }, evidence);
-    await expect(arrival).toHaveCSS('color', 'rgb(255, 0, 255)');
+    const atGate = ['time_gate_arrival', 'gate_arrival'].includes(evidence);
+    await expect(arrival).toHaveCSS('color', atGate ? 'rgb(0, 255, 0)' : 'rgb(255, 0, 255)');
   }
   await page.evaluate(() => schedule.setConfig({}));
   await expect(arrival).toHaveCSS('color', 'rgb(0, 255, 0)');
@@ -479,9 +551,24 @@ test('arrival colour requires landing evidence and survives tracked-record clean
     attrs.itineraries[0].legs[0].finished_at = new Date(Date.now() - 600000).toISOString();
     attrs.itineraries[0].legs[0].evidence = { gate_arrival: attrs.itineraries[0].legs[0].finished_at };
     attrs.tracked_legs = [];
-    schedule.setConfig({ finished_color: '#aabbcc' }); schedule.hass = { ...hass };
+    schedule.setConfig({}); schedule.hass = { ...hass };
   });
+  // The default finish timer must not grey the times while the status stays green.
+  const departure = page.locator('.endpoint-time').first();
+  const badge = page.locator('.badge'), bar = page.locator('.progress-fill');
+  for (const config of [{}, { progress_color: '#ff00ff' }, { status_colors: { arrived: '#00ff00' }, progress_color: '#ff00ff' }]) {
+    await page.evaluate(config => schedule.setConfig(config), config);
+    await expect(badge).toHaveCSS('color', 'rgb(0, 255, 0)');
+    await expect(departure).toHaveCSS('color', 'rgb(0, 255, 0)');
+    await expect(arrival).toHaveCSS('color', 'rgb(0, 255, 0)');
+    await expect(bar).toHaveCSS('background-color', 'rgb(0, 255, 0)');
+  }
+  await page.screenshot({ path: testInfo.outputPath('gate-colours.png') });
+  await page.evaluate(() => schedule.setConfig({ finished_color: '#aabbcc' }));
+  await expect(badge).toHaveCSS('color', 'rgb(170, 187, 204)');
+  await expect(departure).toHaveCSS('color', 'rgb(170, 187, 204)');
   await expect(arrival).toHaveCSS('color', 'rgb(170, 187, 204)');
+  await expect(bar).toHaveCSS('background-color', 'rgb(170, 187, 204)');
   await page.evaluate(() => {
     const leg = hass.states['sensor.flight_itineraries'].attributes.itineraries[0].legs[0];
     delete leg.finished_at;

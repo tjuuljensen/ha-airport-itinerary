@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 
-from homeassistant.core import callback
+from homeassistant.core import Context, callback
 from homeassistant.helpers.event import async_track_point_in_utc_time, async_track_state_change_event
 
 from .const import (
@@ -27,7 +28,7 @@ EVIDENCE_FIELDS = {"departure": ("time_real_departure",), "touchdown": ("time_re
 
 
 class FR24ItineraryTracker:
-    """Own only observed additions, with conservative switch-session ownership."""
+    """Own observed additions and persist fetching control for the selected source."""
 
     def __init__(self, hass, manager, options: dict) -> None:
         self._hass, self._manager, self.options = hass, manager, options
@@ -36,8 +37,14 @@ class FR24ItineraryTracker:
         self._unsubscribers = []
         self._stopped = False
         self._events = []
-        self._session_owned = False  # Never assume continuity across restart/reload.
+        saved_control = manager.lifecycle_snapshot().get("fetching_control", {})
+        same_source = (saved_control.get("switch_entity") == options.get(CONF_FR24_SWITCH)
+                       and saved_control.get("source_entity") == options.get(CONF_TRACKED_FLIGHTS_ENTITY))
+        self._session_owned = same_source and saved_control.get("owned") is True
+        self._manual_keep_on = same_source and saved_control.get("manual_keep_on") is True
         self._switch_command = False
+        self._switch_contexts = deque(maxlen=16)
+        self._last_switch_state = None
         self._paused = set(manager.lifecycle_snapshot().get("paused_journeys", []))
         self.view = {"journeys": [], "tracking_required": False}
 
@@ -53,6 +60,8 @@ class FR24ItineraryTracker:
 
     @callback
     def stop(self):
+        if self._stopped:
+            return
         self._stopped = True
         if self._cancel_timer:
             self._cancel_timer()
@@ -69,13 +78,25 @@ class FR24ItineraryTracker:
         if not self.connection_enabled:
             return
         if event.data.get("entity_id") == self.options.get(CONF_FR24_SWITCH):
-            old, new = event.data.get("old_state"), event.data.get("new_state")
-            if not self._switch_command and old and new and old.state == "on" and new.state == "off":
-                self._session_owned = False
-                self._paused.update(j["id"] for j in self.view["journeys"] if j["tracking_required"])
-            if not new or new.state in {"unknown", "unavailable"}:
-                self._session_owned = False
+            self._observe_switch(self._state(CONF_FR24_SWITCH))
         self.handle_itinerary_updated(event)
+
+    def _observe_switch(self, new):
+        """Observe current state once, even if reconciliation precedes its event."""
+        old, self._last_switch_state = self._last_switch_state, new
+        if not new or not old or new is old:
+            return
+        own_command = (self._switch_command or new.context.id in self._switch_contexts
+                       or new.context.parent_id in self._switch_contexts)
+        if not own_command and old.state == "on" and new.state == "off":
+            self._session_owned = self._manual_keep_on = False
+            groups = journeys(self._manager.snapshot(), datetime.now(timezone.utc).timestamp(), self.options)
+            self._paused.update(j["id"] for j in groups if j["tracking_required"])
+        elif not own_command and old.state == "off" and new.state == "on":
+            self._session_owned = False
+            self._manual_keep_on = True
+            self._paused.clear()
+        # Unavailable states block commands but must not erase persisted control.
 
     @callback
     def _handle_flight_event(self, event):
@@ -88,6 +109,14 @@ class FR24ItineraryTracker:
         entity = self.options.get(option)
         return self._hass.states.get(entity) if entity else None
 
+    def _save_control(self, state):
+        state["fetching_control"] = {
+            "switch_entity": self.options.get(CONF_FR24_SWITCH),
+            "source_entity": self.options.get(CONF_TRACKED_FLIGHTS_ENTITY),
+            "owned": self._session_owned, "manual_keep_on": self._manual_keep_on,
+        }
+        state["paused_journeys"] = sorted(self._paused)
+
     async def _call(self, domain, service, option, **data):
         if self._stopped or not self.connection_enabled:
             return False
@@ -95,7 +124,13 @@ class FR24ItineraryTracker:
         if not entity:
             return False
         try:
-            await self._hass.services.async_call(domain, service, {"entity_id": entity, **data}, blocking=True)
+            context = Context()
+            if domain == "switch":
+                self._switch_contexts.append(context.id)
+            await self._hass.services.async_call(domain, service, {"entity_id": entity, **data},
+                                               blocking=True, context=context)
+            if domain == "switch":
+                self._observe_switch(self._state(CONF_FR24_SWITCH))
             return True
         except Exception as err:
             _LOGGER.warning("FR24 %s failed: %s", service, err)
@@ -122,6 +157,7 @@ class FR24ItineraryTracker:
                        and all(isinstance(flight, dict) for flight in source.attributes["flights"]))
         flights = source.attributes["flights"] if healthy else []
         switch = self._state(CONF_FR24_SWITCH)
+        self._observe_switch(switch)
         fetching = switch.state == "on" if self.options.get(CONF_FR24_SWITCH) and switch else not self.options.get(CONF_FR24_SWITCH)
         fresh = healthy and fetching and 0 <= now - source.last_updated.timestamp() <= 300
         responsive = healthy and fetching and 0 <= now - getattr(source, "last_reported", source.last_updated).timestamp() <= 300
@@ -206,8 +242,12 @@ class FR24ItineraryTracker:
                 sibling["fresh_airborne"] = airborne
         current_journeys = journeys(trips, now, self.options)
         required = any(j["tracking_required"] for j in current_journeys)
+        if switch and switch.state == "off" and (self._session_owned or self._manual_keep_on):
+            # A restored session found off is a pause, not permission to turn it back on.
+            self._session_owned = self._manual_keep_on = False
+            self._paused.update(j["id"] for j in current_journeys if j["tracking_required"])
         self._paused.intersection_update(j["id"] for j in current_journeys if j["tracking_required"])
-        state["paused_journeys"] = sorted(self._paused)
+        self._save_control(state)
         starts = [timestamp(j["api_start_at"]) for j in current_journeys if timestamp(j["api_start_at"]) > now]
         stops = [timestamp(j["api_stop_at"]) for j in current_journeys if j["tracking_required"] and j["api_stop_at"]]
         self.view = {"connection_enabled": True, "journeys": current_journeys, "tracking_required": required,
@@ -221,10 +261,16 @@ class FR24ItineraryTracker:
                 j["tracking_required"] and j["id"] not in self._paused for j in current_journeys):
             self._switch_command = True
             try:
+                # Save the intent before the service call so a restart cannot lose it.
+                self._session_owned = True
+                self._save_control(state)
+                await self._manager.async_update_lifecycle(state, {})
                 if await self._call("switch", "turn_on", CONF_FR24_SWITCH):
                     switch = self._state(CONF_FR24_SWITCH)
                     self._session_owned = bool(switch and switch.state == "on")
                     fetching = self._session_owned
+                else:
+                    self._session_owned = False
             finally:
                 self._switch_command = False
         cleanup_pending = False
@@ -279,7 +325,10 @@ class FR24ItineraryTracker:
         owned_ids = {r.get("identity") for r in records.values() if r.get("owned") and r.get("source_entity") == self.options.get(CONF_TRACKED_FLIGHTS_ENTITY)}
         unrelated = any(identity(f) not in owned_ids for f in flights)
         self.view.update(fetching=fetching, cleanup_pending=cleanup_pending, session_owned=self._session_owned)
-        if self.options.get(CONF_FR24_DISABLE) and self._session_owned and fetching and not required and responsive and not cleanup_pending and not unrelated:
+        # An empty available sensor may never change/report again after FR24 cleanup.
+        # Keep freshness requirements for evidence and removal, not this idle shutdown.
+        shutdown_source_ready = healthy and (not flights or responsive)
+        if self.options.get(CONF_FR24_DISABLE) and self._session_owned and fetching and not required and shutdown_source_ready and not cleanup_pending and not unrelated:
             self._switch_command = True
             try:
                 await self._call("switch", "turn_off", CONF_FR24_SWITCH)
@@ -289,6 +338,32 @@ class FR24ItineraryTracker:
                     self.view.update(fetching=False, session_owned=False)
             finally:
                 self._switch_command = False
+        active_journeys = [j for j in current_journeys if j["tracking_required"]]
+        if not switch or switch.state not in {"on", "off"}:
+            reason = "switch_unavailable"
+        elif not self.view["fetching"]:
+            reason = "manual_pause" if self._paused else "off"
+        elif self._manual_keep_on:
+            reason = "manual_keep_on"
+        elif required:
+            reason = "arrival_grace_period" if all(j["touchdown_at"] for j in active_journeys) else "active_journey"
+        elif not self.options.get(CONF_FR24_DISABLE):
+            reason = "automatic_shutdown_disabled"
+        elif not self._session_owned:
+            reason = "external_session"
+        elif not healthy:
+            reason = "source_unavailable"
+        elif unrelated:
+            reason = "unrelated_tracked_flights"
+        elif cleanup_pending:
+            reason = "cleanup_pending"
+        elif not shutdown_source_ready:
+            reason = "source_stale"
+        else:
+            reason = "shutdown_pending"
+        self.view.update(fetching_reason=reason, manual_keep_on=self._manual_keep_on,
+                         session_owned=self._session_owned, paused_journeys=sorted(self._paused))
+        self._save_control(state)
         await self._manager.async_update_lifecycle(state, {})
         self._hass.bus.async_fire(EVENT_LIFECYCLE)
         boundaries = starts + stops
@@ -319,6 +394,7 @@ class FR24ItineraryTracker:
         self.options[CONF_FR24_CONNECTION] = enabled
         if not enabled:
             self._session_owned = False
+            self._manual_keep_on = False
             self._events.clear()
             if self._cancel_timer:
                 self._cancel_timer()
@@ -328,6 +404,7 @@ class FR24ItineraryTracker:
         """Publish schedule timing without observing or changing FR24 state."""
         self.set_connection_enabled(False)
         state = self._manager.lifecycle_snapshot()
+        self._save_control(state)
         for record in state.get("records", {}).values():
             # An unconfirmed addition cannot be attributed across a disconnected gap.
             record["pending_add"] = False
@@ -340,7 +417,8 @@ class FR24ItineraryTracker:
                      "paused_journeys": sorted(self._paused), "last_error": None,
                      "cleanup_pending": any(r.get("owned") or r.get("pending_remove")
                                             for r in state.get("records", {}).values()),
-                     "session_owned": False}
+                     "session_owned": False, "manual_keep_on": False,
+                     "fetching_reason": "disconnected"}
         await self._manager.async_update_lifecycle(state, {})
         self._hass.bus.async_fire(EVENT_LIFECYCLE)
         if not self._stopped:

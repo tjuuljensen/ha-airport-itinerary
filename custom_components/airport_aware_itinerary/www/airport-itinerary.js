@@ -1,6 +1,6 @@
 const DOMAIN = "airport_aware_itinerary";
 const DEFAULT_ENTITY = "sensor.flight_itineraries";
-const CARD_VERSION = "1.6.10";
+const CARD_VERSION = "1.6.13";
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (char) =>
@@ -97,6 +97,7 @@ const preferredItinerary = (trips, journeys, now, finishDelaySeconds = 300) => {
   for (const trip of trips) {
     const groups = (journeys || []).filter((journey) => journey.itinerary_id === trip.id);
     const timing = groups.length ? groups : (trip.legs || []).map((leg) => ({
+      leg_ids: [leg.id],
       departure_at: leg.departure?.utc_timestamp,
       expires_at: leg.arrival?.utc_timestamp,
       completed: Boolean(leg.completed || arrivalState(leg, null, now).arrived),
@@ -104,8 +105,13 @@ const preferredItinerary = (trips, journeys, now, finishDelaySeconds = 300) => {
       arrival_pending: arrivalState(leg, null, now).landed,
     }));
     for (const journey of timing) {
-      const gateAt = stamp(journey.final_arrival_at);
-      const retainingArrival = gateAt != null && now < gateAt + finishDelaySeconds * 1000;
+      const journeyLegs = (trip.legs || []).filter((leg) => !journey.leg_ids || journey.leg_ids.includes(leg.id))
+        .sort((a, b) => (stamp(a.departure?.utc_timestamp) || 0) - (stamp(b.departure?.utc_timestamp) || 0));
+      // Older integrations already retain gate evidence on the leg, even when
+      // the journey does not yet expose final_arrival_at.
+      const gateAt = stamp(journey.final_arrival_at) ?? arrivalState(journeyLegs.at(-1) || {}, null, now).gateAt;
+      const retainUntil = gateAt != null ? Math.max(gateAt + finishDelaySeconds * 1000, stamp(journey.api_stop_at) || 0) : null;
+      const retainingArrival = retainUntil != null && now < retainUntil;
       if (!journey.airborne && !retainingArrival && (journey.completed || ["completed", "expired"].includes(journey.status))) continue;
       const departure = stamp(journey.departure_at);
       if (departure == null) continue;
@@ -859,7 +865,15 @@ class AirportItinerarySchedule extends AirportItineraryBase {
     const waitingDetails = waitingForFlightDetails(legs, this._hass?.states?.[state?.attributes?.tracking_source_entity]?.attributes?.flights);
     const selectedJourneys = (state?.attributes?.journeys || []).filter((item) => item.itinerary_id === trip?.id);
     const futureStart = selectedJourneys.map((item) => stamp(item.api_start_at)).filter((value) => value > now).sort((a, b) => a - b)[0];
-    if (["no_flights", "no_matching_flight", "scheduled_match", "live_match"].includes(trackingHealth)
+    const arrivalsRetained = legs.length > 0 && legs.every((leg) => {
+      const arrival = arrivalState(leg, tracked.find((item) => item.itinerary_id === trip?.id && item.leg_id === leg.id), now);
+      return leg.completed || arrival.completedAt != null || arrival.landed || arrival.arrived;
+    });
+    if (arrivalsRetained) {
+      // Provider cleanup is expected after arrival; it is not a new request
+      // waiting for FR24 to resolve the already observed flight.
+      trackingMessage = null;
+    } else if (["no_flights", "no_matching_flight", "scheduled_match", "live_match"].includes(trackingHealth)
         && !tracked.some((item) => item.itinerary_id === trip?.id)) {
       trackingMessage = futureStart && !selectedJourneys.some((item) => item.tracking_required)
         ? `Tracking starts ${new Date(futureStart).toLocaleString(this.displayLocale)}; showing the saved schedule.`
@@ -1055,6 +1069,21 @@ class AirportItinerarySchedule extends AirportItineraryBase {
     const estimatedDeparture = sourceFresh ? stamp(tracked?.time_estimated_departure) : null;
     const arrival = arrivalState(leg, tracked, now);
     const actualArrival = arrival.gateAt || arrival.landedAt;
+    const arrivalObserved = arrival.arrived || arrival.landed || arrival.landedAt != null;
+    const timingFinished = arrivalObserved || leg.completed || arrival.completedAt != null;
+    const elapsedStart = actualDeparture || depMs;
+    const elapsedEnd = arrival.arrived ? arrival.gateAt : arrival.landedAt;
+    const elapsedLabel = arrival.arrived ? "Departure to gate"
+      : arrivalObserved ? "Departure to landing"
+        : timingFinished ? "Actual duration"
+          : actualDeparture ? "Time since departure" : "Time since scheduled departure";
+    // Completed flights must never use the current clock or a scheduled time
+    // as a substitute for a missing actual departure/arrival timestamp.
+    const elapsedValue = timingFinished
+      ? actualDeparture != null && elapsedEnd != null && elapsedEnd >= actualDeparture
+        ? duration((elapsedEnd - actualDeparture) / 1000) : "Unavailable"
+      : duration((now - elapsedStart) / 1000);
+    const showElapsed = timingFinished || elapsedStart != null && now > elapsedStart;
     const estimatedArrival = sourceFresh ? stamp(tracked?.time_estimated_arrival) : null;
     const displayDeparture = actualDeparture || estimatedDeparture || depMs;
     const displayArrival = actualArrival || estimatedArrival || arrMs;
@@ -1139,9 +1168,10 @@ class AirportItinerarySchedule extends AirportItineraryBase {
     const useFinishedOverride = isFinished && configuredColor(this._config.finished_color);
     const finishedColor = "var(--airport-itinerary-finished-color,var(--disabled-text-color))";
     const statusColor = useFinishedOverride ? finishedColor : "var(" + STATUS_COLOR_CONFIG[statusKey] + ")";
-    // Explicit colours outrank defaults in both live and schedule-only modes.
+    // At the gate, both times and progress follow the displayed status colour.
+    // Before gate arrival, explicit colours outrank defaults.
     // A configured finished colour is the phase-specific override after finishing.
-    const progressColor = useFinishedOverride ? finishedColor
+    const progressColor = hasArrived ? statusColor : useFinishedOverride ? finishedColor
       : hasProgressColor ? "var(--airport-itinerary-progress-color)"
         : hasStatusColor ? statusColor
           : isFinished ? finishedColor
@@ -1170,7 +1200,7 @@ class AirportItinerarySchedule extends AirportItineraryBase {
           <div class="progress-labels">${progress == null ? `<span class="progress-label centered">${esc(progressLabel)}</span>` : `<span class="progress-label" style="left:${progress}%;transform:translateX(${progress <= 8 ? "0" : progress >= 92 ? "-100%" : "-50%"})">${esc(progressLabel)}</span>`}</div>
           <div class="muted schedule-note">${hasArrived ? "Gate arrival confirmed by FR24." : isLanded ? "Landing confirmed; awaiting final gate confirmation." : liveProgress != null ? "Progress uses the recent aircraft position; displayed times use live data when available." : liveTracked ? "FR24 matched a live flight, but its position is unavailable or stale; the bar uses the saved schedule." : tracked ? "FR24 matched this scheduled flight. Updated estimated times are shown when available; aircraft position is not live yet." : "Schedule-based only; no matching FR24 flight record was found."}</div>
         </div>
-        <details class="flight-details"><summary>Flight details</summary><div class="flight-detail-grid"><div><span class="muted">Scheduled departure airport time</span><strong>${esc(formatClock(dep.utc_timestamp, originZone, this.displayLocale))}</strong></div><div><span class="muted">Scheduled arrival airport time</span><strong>${esc(formatClock(arr.utc_timestamp, destinationZone, this.displayLocale))}</strong></div><div><span class="muted">Scheduled flight time</span><strong>${durationSeconds == null ? "Arrival not entered" : duration(durationSeconds)}</strong></div>${depMs && now > depMs ? `<div><span class="muted">Scheduled time elapsed</span><strong>${duration((now - depMs) / 1000)}</strong></div>` : ""}<div><span class="muted">Now at ${esc(origin)}</span><strong>${esc(currentAirportTime(originZone, this.displayLocale))}</strong></div><div><span class="muted">Now at ${esc(destination)}</span><strong>${esc(currentAirportTime(destinationZone, this.displayLocale))}</strong></div>${liveTracked ? `<div><span class="muted">Now at aircraft</span><strong>${esc(this.renderPlaneClock(liveTracked, now))}</strong></div><div><span class="muted">Aircraft</span><strong>${esc(liveTracked.aircraft_registration || "FR24")}${liveTracked.altitude != null ? ` · ${esc(Math.round(Number(liveTracked.altitude)))} ft` : ""}${liveTracked.ground_speed != null ? ` · ${esc(Math.round(Number(liveTracked.ground_speed)))} kt` : ""}</strong></div>` : ""}</div></details>
+        <details class="flight-details"><summary>Flight details</summary><div class="flight-detail-grid"><div><span class="muted">Scheduled departure airport time</span><strong>${esc(formatClock(dep.utc_timestamp, originZone, this.displayLocale))}</strong></div><div><span class="muted">Scheduled arrival airport time</span><strong>${esc(formatClock(arr.utc_timestamp, destinationZone, this.displayLocale))}</strong></div><div><span class="muted">Scheduled flight time</span><strong>${durationSeconds == null ? "Arrival not entered" : duration(durationSeconds)}</strong></div>${showElapsed ? `<div><span class="muted">${elapsedLabel}</span><strong>${elapsedValue}</strong></div>` : ""}<div><span class="muted">Now at ${esc(origin)}</span><strong>${esc(currentAirportTime(originZone, this.displayLocale))}</strong></div><div><span class="muted">Now at ${esc(destination)}</span><strong>${esc(currentAirportTime(destinationZone, this.displayLocale))}</strong></div>${liveTracked ? `<div><span class="muted">Now at aircraft</span><strong>${esc(this.renderPlaneClock(liveTracked, now))}</strong></div><div><span class="muted">Aircraft</span><strong>${esc(liveTracked.aircraft_registration || "FR24")}${liveTracked.altitude != null ? ` · ${esc(Math.round(Number(liveTracked.altitude)))} ft` : ""}${liveTracked.ground_speed != null ? ` · ${esc(Math.round(Number(liveTracked.ground_speed)))} kt` : ""}</strong></div>` : ""}</div></details>
       </div>
     </article>`;
   }

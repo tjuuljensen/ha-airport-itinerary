@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.10 bundles card version 1.6.10. Follow the
+AaFI 0.3.13 bundles card version 1.6.13. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.10
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.13
       type: module
 ```
 
@@ -223,6 +223,14 @@ offset-aware timestamps, so crossing timezones or daylight-saving boundaries
 does not distort the elapsed time. A leg without an expected arrival displays
 “Arrival not entered”; it does not infer a duration from a flight number.
 
+Flight details show **Time since departure** while the flight is ongoing, or
+**Time since scheduled departure** if actual departure is not yet known. Once
+landing is observed, the running counter is replaced by the fixed **Departure to
+landing** duration. Gate confirmation changes this to **Departure to gate**.
+Both use actual timestamps, including saved evidence after FR24 cleanup, so they
+do not increase after arrival. Missing actual timestamps display **Unavailable**;
+scheduled timestamps and manual completion are not substitutes for actual timing.
+
 Upcoming flights stay neutral until their scheduled window ends. After confirmed
 arrival (or scheduled arrival when no live match exists), the progress bar uses
 the progress color during the finish delay, then the departure time and bar use
@@ -277,12 +285,13 @@ Explicit card settings apply in both modes:
 - **status_colors** colours the status badge, departure and bar for that status,
   and arrival once landing or arrival is confirmed.
 - **progress_color** overrides the bar, departure and confirmed arrival, while the
-  badge retains its status colour. It remains effective after finishing unless a
-  finished override is configured.
+  badge retains its status colour, until gate arrival. At the gate, both times
+  and the bar follow the displayed status colour instead.
 - **finished_color**, when configured, overrides the badge, departure, progress
   and confirmed arrival after the finish delay. Without it, explicit status/progress
-  colours remain in effect; otherwise eligible finished times and progress use the
-  muted default. An unconfirmed arrival remains normal text in either case.
+  colours remain in effect before gate arrival; otherwise eligible finished times
+  and progress use the muted default. After gate arrival, both times and progress
+  always match the status badge. An unconfirmed arrival remains normal text.
 
 **finish_delay_seconds** defaults to 300. Supported **status_colors** keys are
 scheduled, in_transit, airborne, landed, arrived, connection, and completed.
@@ -292,10 +301,17 @@ Landing shows **Landed · awaiting gate**, or **Taxiing to gate** when fresh gro
 movement is available; both use `status_colors.landed`. These colours survive
 loss of the FR24 record. Landing does not start the finish or auto-collapse timer.
 Gate confirmation shows **Final arrival · at gate** with `status_colors.arrived`.
-That colour remains for the finish delay, including during automatic itinerary
-selection, before the configured finished colour and collapse settings apply.
-Explicit status/progress colours still persist after that delay unless a finished
-colour overrides them. Manual completion and removal remain available actions.
+That colour remains for the finish delay before the configured finished colour
+and collapse settings apply. Automatic itinerary selection retains the arrived
+trip until its journey API/reconcile deadline, or a longer finish delay. It does
+not switch to an upcoming trip just because the colour delay elapsed or FR24
+removed the live record. Manual selection and a configured itinerary ID still
+take precedence. If no journey deadline is available, selection uses the finish
+delay. Saved arrival evidence also suppresses misleading FR24 waiting messages;
+an unresolved future leg still shows its own tracking notice.
+After that delay, the gate-arrival status, Departed, Final arrival and progress
+remain the same colour; an explicit finished colour changes all four together.
+Manual completion and removal remain available actions.
 
 The reusable badge adapter separately keeps final arrival visible for its
 configured `after` window from gate confirmation, falling back to touchdown when

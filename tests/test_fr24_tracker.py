@@ -293,6 +293,117 @@ async def test_manual_off_is_respected_until_journey_ends(hass, setup_tracker):
     assert not calls and tracker.view["paused_journeys"]
 
 
+async def test_owned_shutdown_survives_restart_with_unchanged_empty_source(hass, setup_tracker, freezer):
+    tracker, manager, calls = setup_tracker(fr24_auto_enable=True, fr24_auto_disable=True)
+    tracker.start()
+    hass.states.async_set(SWITCH, "off")
+    await tracker.async_sync(NOW)
+    await hass.async_block_till_done()
+    assert manager.lifecycle_snapshot()["fetching_control"]["owned"]
+    assert not tracker.view["manual_keep_on"]  # Our own turn-on is not a manual override.
+    row = manager._data["itineraries"][0]["legs"][0]
+    row["evidence"] = {"touchdown": iso(NOW), "gate_arrival": iso(NOW + 600)}
+    tracker.stop()
+    restarted, restored, _ = setup_tracker(saved=deepcopy(manager._data),
+                                          fr24_auto_enable=True, fr24_auto_disable=True)
+    restarted.start()
+    calls.clear()
+    freezer.move_to(datetime.fromtimestamp(NOW + 7199, timezone.utc))
+    await restarted.async_sync(NOW + 7199)
+    assert restarted.view["fetching_reason"] == "arrival_grace_period"
+    assert not calls
+    # The unchanged empty source is almost two hours old when the timer fires.
+    boundary = datetime.fromtimestamp(NOW + 7200, timezone.utc)
+    freezer.move_to(boundary)
+    async_fire_time_changed(hass, boundary)
+    await hass.async_block_till_done()
+    assert calls == [{"service": "turn_off", "entity_id": SWITCH}]
+    assert restarted.view["fetching_reason"] == "off"
+    assert not restored.lifecycle_snapshot()["fetching_control"]["owned"]
+    assert not restarted.view["paused_journeys"]
+
+
+async def test_overdue_owned_session_shuts_down_immediately_on_startup(hass, setup_tracker):
+    saved = {"itineraries": [], "lifecycle": {"fetching_control": {
+        "switch_entity": SWITCH, "source_entity": SOURCE, "owned": True}}}
+    tracker, _, calls = setup_tracker(saved=saved, fr24_auto_disable=True)
+    await tracker.async_sync(NOW + 86400)
+    assert calls == [{"service": "turn_off", "entity_id": SWITCH}]
+
+
+async def test_manual_keep_on_and_pause_survive_reload(hass, setup_tracker):
+    tracker, manager, calls = setup_tracker(fr24_auto_enable=True, fr24_auto_disable=True)
+    await tracker.async_sync(NOW)
+    tracker.start()
+    hass.states.async_set(SWITCH, "off")
+    await hass.async_block_till_done()
+    assert tracker.view["fetching_reason"] == "manual_pause"
+    tracker.stop()
+    restarted, restored, _ = setup_tracker(saved=deepcopy(manager._data), fr24_auto_enable=True,
+                                          fr24_auto_disable=True)
+    hass.states.async_set(SWITCH, "off")
+    restarted.start()
+    calls.clear()
+    await restarted.async_sync(NOW)
+    assert not calls and restarted.view["paused_journeys"]
+    hass.states.async_set(SWITCH, "on")
+    await hass.async_block_till_done()
+    assert restarted.view["manual_keep_on"] and not restarted.view["paused_journeys"]
+    await restored.async_delete_itinerary("trip")
+    await hass.async_block_till_done()
+    restarted.stop()
+    again, _, _ = setup_tracker(saved=deepcopy(restored._data), fr24_auto_disable=True)
+    calls.clear()
+    await again.async_sync(NOW + 3600)
+    assert not calls and again.view["fetching_reason"] == "manual_keep_on"
+
+
+@pytest.mark.parametrize("blocker", ["unavailable", "unrelated", "different_source", "different_switch", "legacy"])
+async def test_restart_recovery_preserves_shutdown_guards(hass, setup_tracker, blocker):
+    control = {"switch_entity": SWITCH, "source_entity": SOURCE, "owned": True}
+    if blocker == "different_source":
+        control["source_entity"] = "sensor.other"
+    if blocker == "different_switch":
+        control["switch_entity"] = "switch.other"
+    saved = {"itineraries": [], "lifecycle": {"fetching_control": control} if blocker != "legacy" else {}}
+    tracker, manager, calls = setup_tracker(saved=saved, fr24_auto_disable=True,
+                                          flights=[flight()] if blocker == "unrelated" else [])
+    if blocker == "unavailable":
+        hass.states.async_set(SOURCE, "unavailable")
+    await tracker.async_sync(NOW + 3600)
+    assert not calls
+    expected = {"unavailable": "source_unavailable", "unrelated": "unrelated_tracked_flights"}
+    assert tracker.view["fetching_reason"] == expected.get(blocker, "external_session")
+    if blocker == "unavailable":
+        assert manager.lifecycle_snapshot()["fetching_control"]["owned"]
+        hass.states.async_set(SOURCE, "0", {"flights": []})
+        await tracker.async_sync(NOW + 3601)
+        assert calls[-1]["service"] == "turn_off"
+
+
+async def test_restored_owned_switch_found_off_pauses_active_journey(hass, setup_tracker):
+    saved = {"itineraries": [{"id": "trip", "name": "Trip", "legs": [leg()]}],
+             "lifecycle": {"fetching_control": {"switch_entity": SWITCH, "source_entity": SOURCE, "owned": True}}}
+    tracker, _, calls = setup_tracker(saved=saved, fr24_auto_enable=True, fr24_auto_disable=True)
+    hass.states.async_set(SWITCH, "off")
+    await tracker.async_sync(NOW)
+    assert not calls and tracker.view["fetching_reason"] == "manual_pause"
+
+
+async def test_switch_unavailability_preserves_owned_session(hass, setup_tracker):
+    tracker, manager, calls = setup_tracker(rows=[], saved={"itineraries": [], "lifecycle": {
+        "fetching_control": {"switch_entity": SWITCH, "source_entity": SOURCE, "owned": True}}},
+        fr24_auto_disable=True)
+    tracker.start()
+    hass.states.async_set(SWITCH, "unavailable")
+    await hass.async_block_till_done()
+    assert not calls and manager.lifecycle_snapshot()["fetching_control"]["owned"]
+    assert tracker.view["fetching_reason"] == "switch_unavailable"
+    hass.states.async_set(SWITCH, "on")
+    await hass.async_block_till_done()
+    assert calls == [{"service": "turn_off", "entity_id": SWITCH}]
+
+
 async def test_shared_occurrence_is_not_removed_when_one_trip_is_deleted(hass, setup_tracker):
     tracker, manager, calls = setup_tracker(saved={"itineraries": [
         {"id": "trip", "name": "One", "legs": [leg()]}, {"id": "two", "name": "Two", "legs": [leg(id="other")]}]})
