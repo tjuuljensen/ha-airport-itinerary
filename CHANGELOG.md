@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.16 - 2026-11-01
+
+Includes dashboard card version 1.6.15.
+
+- Report the installed card version through the itinerary sensor. Both cards
+  show a reload notice when the loaded version differs, without polling FR24
+  or GitHub. Version changes arrive through the existing HA state connection.
+- Keep the notice visible on folded cards and during focused edits, without
+  replacing form fields or automatically reloading. Disable reload during saves.
+  One manual reload is needed to activate this feature in existing clients.
+
 ## 0.3.15 - 2026-11-01
 
 Includes dashboard card version 1.6.14.

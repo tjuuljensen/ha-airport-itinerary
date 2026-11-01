@@ -26,7 +26,7 @@ or uses the flight number if no destination was entered.
 
 ## Install with AaFI
 
-AaFI 0.3.15 bundles card version 1.6.14. Follow the
+AaFI 0.3.16 bundles card version 1.6.15. Follow the
 [HACS or manual installation steps](../README.md#install-with-hacs), restart HA
 and add the AaFI integration, then reload the browser. Both cards are installed
 and registered automatically with UI-managed Lovelace resources; no separate
@@ -46,7 +46,7 @@ configuration is written in YAML:
 lovelace:
   resource_mode: yaml
   resources:
-    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.14
+    - url: /airport_aware_itinerary/airport-itinerary.js?v=1.6.15
       type: module
 ```
 
@@ -205,7 +205,15 @@ final landing, then final gate arrival. It shows the fixed actual duration besid
 the scheduled duration and arrival status. Missing actual timestamps show
 **Unavailable**. Saved arrival status, actual times and colours remain after
 fetching stops, provider cleanup or a restart, until the itinerary is removed.
-Reload open dashboards after a card update to load the new version.
+Starting with card 1.6.15, both cards compare their loaded version with the
+installed version reported by the itinerary sensor. A version mismatch displays
+an update notice and a **Reload dashboard** button, including on folded cards
+and while editing. Save unfinished edits before clicking; reload is never
+automatic. The notice also covers rollbacks and survives temporary sensor
+unavailability. Older integrations without version metadata remain compatible.
+This detects updates already installed in Home Assistant, not unpublished or
+uninstalled releases. It uses existing HA state updates and makes no FR24 or
+GitHub requests. Reload once after installing 1.6.15 to activate this feature.
 
 Each leg's folded **Flight details** section shows the current time at its
 origin and destination airports. When the optional FR24 source provides a

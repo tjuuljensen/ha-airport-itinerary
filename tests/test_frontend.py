@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from custom_components.airport_aware_itinerary.frontend import (
-    CARD_PATH, CARD_URL, RESOURCE_URL, async_setup_frontend,
+    CARD_PATH, CARD_URL, CARD_VERSION, RESOURCE_URL, async_setup_frontend,
 )
 from custom_components.airport_aware_itinerary.const import DOMAIN
 from homeassistant.components.lovelace import LOVELACE_DATA
@@ -67,6 +67,9 @@ async def test_bundled_module_is_served_by_ha_and_survives_entry_reload(hass, ha
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    sensor = hass.states.get("sensor.flight_itineraries")
+    assert sensor.attributes["card_version"] == CARD_VERSION
+    assert f'const CARD_VERSION = "{CARD_VERSION}";' in CARD_PATH.read_text()
     client = await hass_client()
     response = await client.get(CARD_URL)
     assert response.status == 200

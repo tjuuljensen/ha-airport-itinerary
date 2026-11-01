@@ -678,3 +678,92 @@ test('yesterday arrival keeps actual times and colours with fetching off', async
   await expect(page.locator('.tracking-notice')).toHaveCount(0);
   await expect(page.locator('.badge')).toHaveText('Final arrival · at gate');
 });
+
+
+for (const kind of ['input', 'schedule']) {
+  test(kind + ' card shows version updates while folded without changing flight data', async ({ page }, testInfo) => {
+    await mount(page, 320);
+    await page.evaluate(kind => {
+      if (kind === 'schedule') {
+        card.remove(); window.card = document.createElement('airport-itinerary-schedule');
+        card.setConfig({}); document.body.append(card); card.hass = hass;
+        card._collapseOverride = true; card.render();
+      } else card.setConfig({ initial_fold: true });
+      hass.states['sensor.flight_itineraries'].attributes.card_version = CARD_VERSION;
+      card.hass = { ...hass };
+    }, kind);
+    await expect(page.locator('.card-update-notice')).toHaveCount(0);
+    await page.evaluate(() => {
+      hass.states['sensor.flight_itineraries'].attributes.card_version = '9.0.0';
+      card.hass = { ...hass };
+    });
+    await expect(page.getByRole('button', { name: 'Reload dashboard' })).toBeVisible();
+    await expect(page.locator('.card-update-notice')).toContainText('Save any unfinished edits first');
+    expect(await page.locator('.card-update-notice').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('update-notice.png') });
+    // Keep the last known update across a temporary restart/unavailable sensor.
+    await page.evaluate(() => {
+      delete hass.states['sensor.flight_itineraries'].attributes.card_version;
+      card.hass = { ...hass };
+    });
+    await expect(page.locator('.card-update-notice')).toBeVisible();
+    await page.evaluate(() => {
+      hass.states['sensor.flight_itineraries'].attributes.card_version = CARD_VERSION;
+      card.hass = { ...hass };
+    });
+    await expect(page.locator('.card-update-notice')).toHaveCount(0);
+  });
+}
+
+test('version-only updates preserve focused flight drafts and never reload automatically', async ({ page }) => {
+  await mount(page);
+  await fillFlight(page);
+  await page.locator('#label').fill('Unsaved flight');
+  await page.evaluate(() => {
+    window.draftField = card.shadowRoot.getElementById('label');
+    window.reloads = 0; card.reloadDashboard = () => window.reloads++;
+    hass.states['sensor.flight_itineraries'].attributes.card_version = '<invalid>';
+    card.hass = { ...hass };
+  });
+  await expect(page.locator('.card-update-notice')).toHaveCount(0);
+  await page.evaluate(() => {
+    hass.states['sensor.flight_itineraries'].attributes.card_version = '9.0.0';
+    card.hass = { ...hass };
+  });
+  await expect(page.getByRole('button', { name: 'Reload dashboard' })).toBeVisible();
+  expect(await page.evaluate(() => card.shadowRoot.activeElement === draftField && draftField === card.shadowRoot.getElementById('label'))).toBe(true);
+  await expect(page.locator('#label')).toHaveValue('Unsaved flight');
+  await expect(page.locator('#number')).toHaveValue('SK935');
+  expect(await page.evaluate(() => reloads)).toBe(0);
+  await page.evaluate(() => { card._busy = true; card.updateVersionNotice(); });
+  await expect(page.getByRole('button', { name: 'Reload dashboard' })).toBeDisabled();
+  await page.evaluate(() => { card._busy = false; card.updateVersionNotice(); });
+  await page.getByRole('button', { name: 'Reload dashboard' }).click();
+  expect(await page.evaluate(() => reloads)).toBe(1);
+});
+
+test('reload button loads the deployed module and clears its version notice', async ({ page }) => {
+  const fs = require('node:fs');
+  let source = fs.readFileSync(path.resolve(__dirname, '../custom_components/airport_aware_itinerary/www/airport-itinerary.js'), 'utf8');
+  let installed = source.match(/const CARD_VERSION = "([^"]+)"/)[1];
+  await page.route('http://card.test/**', async route => {
+    if (route.request().url().endsWith('/card.js')) {
+      await route.fulfill({ contentType: 'text/javascript', body: source }); return;
+    }
+    await route.fulfill({ contentType: 'text/html', body: '<!doctype html><body><script src="/card.js"></script><script>window.card=document.createElement("airport-itinerary-schedule");card.setConfig({});document.body.append(card);window.hass={states:{"sensor.flight_itineraries":{entity_id:"sensor.flight_itineraries",attributes:{itineraries:[],card_version:' + JSON.stringify(installed) + '}}}};card.hass=hass;</script>' });
+  });
+  await page.goto('http://card.test/dashboard');
+  await expect(page.locator('airport-itinerary-schedule')).toBeVisible();
+  await expect(page.locator('.card-update-notice')).toHaveCount(0);
+  source = source.replace('const CARD_VERSION = "' + installed + '"', 'const CARD_VERSION = "9.0.0"');
+  installed = '9.0.0';
+  await page.evaluate(() => {
+    hass.states['sensor.flight_itineraries'].attributes.card_version = '9.0.0';
+    card.hass = { ...hass };
+  });
+  await expect(page.locator('.card-update-notice')).toBeVisible();
+  await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: 'Reload dashboard' }).click()]);
+  await expect(page.locator('airport-itinerary-schedule')).toBeVisible();
+  await expect(page.locator('.card-update-notice')).toHaveCount(0);
+  expect(await page.evaluate(() => CARD_VERSION)).toBe('9.0.0');
+});

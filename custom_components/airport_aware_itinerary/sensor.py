@@ -16,6 +16,7 @@ from .airport_data import get_airport_cities, get_airport_coordinates, get_data_
 from .const import CONF_TRACKED_FLIGHTS_ENTITY, CONF_FR24_CONNECTION, DOMAIN, EVENT_UPDATED, EVENT_LIFECYCLE
 from .lifecycle import match_flight
 from .manager import ItineraryManager
+from .frontend import CARD_VERSION
 from .plane_timezone import timezone_for_coordinates
 
 
@@ -122,6 +123,7 @@ class FlightItinerariesSensor(SensorEntity):
                     leg["arrival_phase"] = "taxiing"
         source_health = _tracking_source_health(source_entity, source_state, tracked_legs) if connected else "disabled"
         self._attr_extra_state_attributes = {
+            "card_version": CARD_VERSION,
             "itineraries": itineraries,
             "journeys": lifecycle.get("journeys", []),
             "tracking": lifecycle,

@@ -1,6 +1,6 @@
 const DOMAIN = "airport_aware_itinerary";
 const DEFAULT_ENTITY = "sensor.flight_itineraries";
-const CARD_VERSION = "1.6.14";
+const CARD_VERSION = "1.6.15";
 
 const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (char) =>
@@ -305,10 +305,41 @@ class AirportItineraryBase extends HTMLElement {
   set hass(value) {
     this._hass = value;
     if (this.shouldRenderForHassChange()) this.requestRender();
+    // Update separately from the form so focused edits never hide an upgrade.
+    this.updateVersionNotice();
   }
 
   get hass() {
     return this._hass;
+  }
+
+  updateVersionNotice() {
+    const installed = this.model.state?.attributes?.card_version;
+    if (typeof installed === "string" && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(installed) && installed.length <= 64) {
+      this._availableCardVersion = installed;
+    }
+    let notice = this.shadowRoot.querySelector(".card-update-notice");
+    if (!this._availableCardVersion || this._availableCardVersion === CARD_VERSION) {
+      notice?.remove();
+      return;
+    }
+    const card = this.shadowRoot.querySelector(".card");
+    if (!card) return;
+    if (!notice) {
+      notice = document.createElement("div");
+      notice.className = "card-update-notice";
+      notice.setAttribute("role", "status");
+      notice.setAttribute("aria-live", "polite");
+      notice.innerHTML = `<span>A card update is available. Reload this dashboard to use it. Save any unfinished edits first.</span><button type="button" class="secondary">Reload dashboard</button>`;
+      notice.querySelector("button").addEventListener("click", () => this.reloadDashboard());
+      card.prepend(notice);
+    }
+    notice.title = `Loaded card ${CARD_VERSION}; installed card ${this._availableCardVersion}`;
+    notice.querySelector("button").disabled = Boolean(this._busy);
+  }
+
+  reloadDashboard() {
+    window.location.reload();
   }
 
   get displayLocale() {
@@ -400,6 +431,9 @@ class AirportItineraryBase extends HTMLElement {
       .muted { color:var(--secondary-text-color); font-size:.88rem; }
       .notice { min-height:1.2em; margin:8px 0; color:var(--error-color,#c62828); font-size:.9rem; }
       .notice.success { color:var(--success-color,#2e7d32); }
+      .card-update-notice { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px; margin-bottom:14px; border:1px solid var(--warning-color,#ffa600); border-radius:8px; color:var(--primary-text-color); }
+      .card-update-notice span { flex:1 1 200px; }
+      .card-update-notice button { flex:0 0 auto; white-space:normal; }
       .tracking-notice { padding:0 0 8px; color:var(--warning-color,var(--secondary-text-color)); font-size:.88rem; }
       label { display:block; font-size:.82rem; color:var(--secondary-text-color); margin:0 0 4px; }
       input,select { width:100%; min-height:40px; padding:8px 10px; border:1px solid var(--divider-color,#bbb); border-radius:8px; color:var(--primary-text-color); background:var(--primary-background-color,#fff); font:inherit; }
@@ -500,6 +534,7 @@ class AirportItineraryBase extends HTMLElement {
     }
     this._skipPreserve = false;
     this.shadowRoot.innerHTML = `<style>${this.styles()}</style>${content}`;
+    this.updateVersionNotice();
     this.shadowRoot.querySelectorAll('input[type="date"], input[type="time"]').forEach((field) => {
       field.lang = this.displayLocale;
     });
